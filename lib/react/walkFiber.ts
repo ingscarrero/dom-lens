@@ -58,146 +58,87 @@ const FIBER_TAG: Record<number, FiberKind> = {
   4: 'portal',
 };
 
-function createShim(): DevtoolsHook {
-  let nextRendererId = 0;
-  const listeners: Record<string, Set<(data: any) => void>> = {};
-  const fiberRoots = new Map<number, Set<FiberRoot>>();
-
-  const emit = (event: string, data: any) => {
-    const set = listeners[event];
-    if (!set) return;
-    for (const fn of set) {
-      try {
-        fn(data);
-      } catch {
-        /* swallow listener errors */
-      }
-    }
-  };
-
-  const sub = (event: string, fn: (data: any) => void) => {
-    if (!listeners[event]) listeners[event] = new Set();
-    listeners[event]!.add(fn);
-    return () => {
-      listeners[event]?.delete(fn);
-    };
-  };
-
-  const shim: DevtoolsHook = {
-    supportsFiber: true,
-    supportsFlight: true,
-    renderers: new Map(),
-    rendererInterfaces: new Map(),
-    helpers: new Map(),
-    listeners,
-    emit,
-    sub,
-    on: (event, fn) => {
-      sub(event, fn);
-    },
-    off: (event, fn) => {
-      listeners[event]?.delete(fn);
-    },
-    once: (event, fn) => {
-      const unsub = sub(event, (data) => {
-        unsub();
-        fn(data);
-      });
-    },
-    getFiberRoots(id: number) {
-      if (!fiberRoots.has(id)) fiberRoots.set(id, new Set());
-      return fiberRoots.get(id)!;
-    },
-    inject(renderer) {
-      const id = ++nextRendererId;
-      shim.renderers.set(id, renderer);
-      try {
-        emit('renderer', { id, renderer });
-      } catch {
-        /* ignore */
-      }
-      return id;
-    },
-    onCommitFiberRoot(id, root) {
-      if (!fiberRoots.has(id)) fiberRoots.set(id, new Set());
-      fiberRoots.get(id)!.add(root);
-    },
-    onCommitFiberUnmount() {},
-    onPostCommitFiberRoot() {},
-    checkDCE() {},
-    __domLensRoots: fiberRoots,
-    __domLensShim: true,
-  };
-  return shim;
+/**
+ * v0.2.x: we no longer install or patch __REACT_DEVTOOLS_GLOBAL_HOOK__.
+ *
+ * Why: even a "complete" shim caused crashes inside the React DevTools
+ * extension's backendManager.registerRenderer when DOM Lens's script ran
+ * before RDT. Conversely, patching an existing hook (when RDT was already
+ * present) was racy with their own commit-root path.
+ *
+ * What we do instead: discover fiber roots purely by reading the
+ * `__reactContainer$<hash>` property React itself writes onto the root
+ * container DOM element. We additionally read any roots tracked by RDT's
+ * hook if it happens to be installed. Either path is non-mutating and
+ * cannot conflict with RDT.
+ */
+export function installDevtoolsHookShim(): void {
+  // Intentionally a no-op. See comment above.
 }
 
-export function installDevtoolsHookShim(): void {
-  const w = window as any;
-  const existing: DevtoolsHook | undefined = w[HOOK_KEY];
-  if (!existing) {
-    const shim = createShim();
-    try {
-      Object.defineProperty(w, HOOK_KEY, {
-        value: shim,
-        configurable: true,
-        writable: true, // allow React DevTools to replace if it loads later (rare)
-      });
-    } catch {
-      w[HOOK_KEY] = shim;
+function findRootsByDomScan(): FiberRoot[] {
+  const out: FiberRoot[] = [];
+  const seen = new Set<unknown>();
+  const all = document.querySelectorAll('*');
+  for (let i = 0; i < all.length; i++) {
+    const el = all[i] as any;
+    for (const k in el) {
+      if (k.charCodeAt(0) === 95 && k.startsWith('__reactContainer$')) {
+        const root = el[k];
+        if (root && !seen.has(root)) {
+          seen.add(root);
+          out.push(root as FiberRoot);
+        }
+        break; // a node has at most one container key
+      }
     }
-    return;
+    // Legacy React 16/17
+    if (el._reactRootContainer && el._reactRootContainer._internalRoot) {
+      const root = el._reactRootContainer._internalRoot;
+      if (root && !seen.has(root)) {
+        seen.add(root);
+        out.push(root as FiberRoot);
+      }
+    }
   }
-  if (existing.__domLensRoots) return; // already patched
-  // Non-destructively augment an existing hook (React DevTools is installed).
-  const roots = new Map<number, Set<FiberRoot>>();
-  existing.__domLensRoots = roots;
-  const origCommit = existing.onCommitFiberRoot?.bind(existing);
-  existing.onCommitFiberRoot = function (id: number, root: FiberRoot, ...rest: any[]) {
-    try {
-      if (!roots.has(id)) roots.set(id, new Set());
-      roots.get(id)!.add(root);
-    } catch {
-      /* ignore */
-    }
-    if (origCommit) return origCommit(id, root, ...rest);
-  };
+  return out;
 }
 
 function getFiberRoots(): FiberRoot[] {
-  const hook = (window as any)[HOOK_KEY] as DevtoolsHook | undefined;
-  if (!hook) return [];
   const out: FiberRoot[] = [];
+  const seen = new Set<unknown>();
 
-  if (hook.__domLensRoots) {
-    for (const set of hook.__domLensRoots.values()) {
-      for (const r of set) out.push(r);
+  // 1) Primary: scan the DOM for React's container properties. This works
+  //    regardless of whether the React DevTools extension is installed.
+  for (const r of findRootsByDomScan()) {
+    if (!seen.has(r)) {
+      seen.add(r);
+      out.push(r);
     }
   }
 
-  const anyHook = hook as any;
-  if (typeof anyHook.getFiberRoots === 'function') {
+  // 2) Secondary: if the React DevTools hook is present, pull any roots
+  //    it knows about (in case DOM scan missed a portal-style root).
+  const hook = (window as any)[HOOK_KEY] as any;
+  if (hook && typeof hook.getFiberRoots === 'function' && hook.renderers?.size) {
     for (const [id] of hook.renderers) {
       try {
-        const set: Set<FiberRoot> = anyHook.getFiberRoots(id);
-        if (set) for (const r of set) out.push(r);
+        const set = hook.getFiberRoots(id) as Set<FiberRoot> | undefined;
+        if (set) {
+          for (const r of set) {
+            if (!seen.has(r)) {
+              seen.add(r);
+              out.push(r);
+            }
+          }
+        }
       } catch {
         /* ignore */
       }
     }
   }
 
-  if (out.length === 0) {
-    const containers = document.querySelectorAll('[id]');
-    containers.forEach((el) => {
-      const key = Object.keys(el).find((k) => k.startsWith('__reactContainer$'));
-      if (key) {
-        const root = (el as any)[key];
-        if (root) out.push(root as FiberRoot);
-      }
-    });
-  }
-
-  return Array.from(new Set(out));
+  return out;
 }
 
 function fiberKind(fiber: Fiber): FiberKind {

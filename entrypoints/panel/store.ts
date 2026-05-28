@@ -81,8 +81,18 @@ export const useStore = create<State & Actions>((set) => ({
   setCapturing: (v) =>
     set({ capturing: v, captureError: v ? null : undefined, captureProgress: v ? null : null }),
   setCaptureProgress: (p) => set({ captureProgress: p }),
+  // Preserve captureError when finalizing — screenshot failures should remain
+  // visible after the rest of the snapshot lands. setCapturing(true) clears it
+  // at the start of the next capture.
   setSnapshot: (s) =>
-    set({ snapshot: s, capturing: false, captureError: null, captureProgress: null, tiles: [], focused: null }),
+    set((state) => ({
+      snapshot: s,
+      capturing: false,
+      captureProgress: null,
+      tiles: [],
+      focused: null,
+      captureError: state.captureError,
+    })),
   setCaptureError: (e) => set({ captureError: e, capturing: false, captureProgress: null }),
   pushNetwork: (e) =>
     set((s) => {

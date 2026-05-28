@@ -64,20 +64,31 @@ export async function runCapture(ctx: CaptureContext, settings: Settings): Promi
         maxTiles: settings.fullPageMaxTiles,
         onProgress: (p) =>
           store.setCaptureProgress({ step: p.step, total: p.total, phase: 'tiles' }),
-        delayMs: 120,
+        // Chrome rate-limits captureVisibleTab to ~2/sec; stay under
+        // and let the SW retry on quota errors.
+        delayMs: 600,
       });
       if (res.ok) {
         screenshot = res.screenshot;
       } else {
+        console.warn('[DOM Lens] full-page screenshot failed:', res.reason);
         // Fall back to viewport-only capture if full-page fails (e.g. tile cap)
         const vp = await captureViewportOnly(ctx.tabId, metrics, captureTile);
-        if (vp.ok) screenshot = vp.screenshot;
-        else store.setCaptureError(`screenshot failed: ${res.reason}`);
+        if (vp.ok) {
+          screenshot = vp.screenshot;
+          store.setCaptureError(
+            `Full-page capture failed (${res.reason}). Fell back to visible-viewport.`,
+          );
+        } else {
+          store.setCaptureError(
+            `Screenshot failed. Full-page: ${res.reason}. Viewport: ${vp.reason}.`,
+          );
+        }
       }
     } else {
       const vp = await captureViewportOnly(ctx.tabId, metrics, captureTile);
       if (vp.ok) screenshot = vp.screenshot;
-      else store.setCaptureError(`screenshot failed: ${vp.reason}`);
+      else store.setCaptureError(`Screenshot failed: ${vp.reason}`);
     }
 
     store.setCaptureProgress({ step: 1, total: 1, phase: 'finalizing' });

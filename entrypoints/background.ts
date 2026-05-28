@@ -2,6 +2,30 @@ import { defineBackground } from 'wxt/utils/define-background';
 import type { PanelToBg, BgToPanel } from '@/lib/bridge/protocol';
 import { chatStream, listModels } from '@/lib/lm-studio/client';
 
+/**
+ * Chrome's chrome.tabs.captureVisibleTab is rate-limited to ~2 calls/sec per
+ * window. Long pages stitching many tiles regularly trip this. Retry with
+ * exponential backoff when the call rejects, up to a few attempts.
+ */
+async function captureVisibleTabWithRetry(
+  windowId: number,
+  attempts = 4,
+): Promise<string> {
+  let delay = 600;
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await chrome.tabs.captureVisibleTab(windowId, { format: 'png' });
+    } catch (e) {
+      lastErr = e;
+      if (i === attempts - 1) break;
+      await new Promise((r) => setTimeout(r, delay));
+      delay *= 2;
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
+
 export default defineBackground({
   type: 'module',
   main() {
@@ -26,9 +50,7 @@ export default defineBackground({
           if (msg.type === 'capture.tile') {
             try {
               const tab = await chrome.tabs.get(msg.tabId);
-              const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
-                format: 'png',
-              });
+              const dataUrl = await captureVisibleTabWithRetry(tab.windowId);
               send({ type: 'capture.tile.result', requestId: msg.requestId, ok: true, dataUrl });
             } catch (e: any) {
               send({
