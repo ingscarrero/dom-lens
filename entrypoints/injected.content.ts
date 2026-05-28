@@ -170,10 +170,16 @@ export default defineContentScript({
       },
     };
 
-    Object.defineProperty(window, '__dom_lens__', {
-      value: api,
-      configurable: true,
-      writable: false,
-    });
+    // Replace any older instance so an extension reload doesn't strand the
+    // page with a stale (e.g. v0.1.0) main-world API.
+    try {
+      Object.defineProperty(window, '__dom_lens__', {
+        value: api,
+        configurable: true,
+        writable: true,
+      });
+    } catch {
+      (window as any).__dom_lens__ = api;
+    }
   },
 });

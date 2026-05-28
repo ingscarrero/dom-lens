@@ -75,6 +75,9 @@ export async function callScrollMetrics(): Promise<
 > {
   const expr = `(function(){
     if (!window.__dom_lens__) return JSON.stringify({ __no_api: true });
+    if (typeof window.__dom_lens__.scrollMetrics !== 'function') {
+      return JSON.stringify({ __error: 'Stale DOM Lens content script (version ' + (window.__dom_lens__.version || '<unknown>') + '). Reload this tab after the extension was updated.' });
+    }
     try { return JSON.stringify(window.__dom_lens__.scrollMetrics()); }
     catch (e) { return JSON.stringify({ __error: (e && e.message) || String(e) }); }
   })()`;
