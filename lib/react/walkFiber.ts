@@ -200,6 +200,76 @@ function readBounds(fiber: Fiber, scrollX: number, scrollY: number): NodeBounds 
   }
 }
 
+function directText(el: Element): string {
+  let out = '';
+  for (let n: Node | null = el.firstChild; n; n = n.nextSibling) {
+    if (n.nodeType === 3) {
+      out += (n as Text).data;
+      if (out.length > 80) break;
+    }
+  }
+  return out.replace(/\s+/g, ' ').trim();
+}
+
+function clip(s: string, n = 60): string {
+  s = s.replace(/\s+/g, ' ').trim();
+  return s.length > n ? s.slice(0, n - 1) + '…' : s;
+}
+
+function readMetadata(fiber: Fiber): { tag?: string; hint?: string } {
+  const node = findHostNode(fiber);
+  if (!node || (node as Element).nodeType !== 1) return {};
+  const el = node as Element;
+  const tag = el.tagName.toLowerCase();
+
+  // aria-label first — explicit author intent for accessibility
+  const ariaLabel = el.getAttribute('aria-label');
+  if (ariaLabel) return { tag, hint: clip(ariaLabel) };
+
+  const title = el.getAttribute('title');
+  if (title) return { tag, hint: clip(title) };
+
+  if (tag === 'img') {
+    const alt = (el as HTMLImageElement).alt;
+    if (alt) return { tag, hint: 'alt: ' + clip(alt, 50) };
+    const src = (el as HTMLImageElement).getAttribute('src');
+    if (src) {
+      const fname = src.split('/').pop()?.split('?')[0] ?? src;
+      return { tag, hint: clip(fname, 50) };
+    }
+    return { tag };
+  }
+
+  if (tag === 'a') {
+    const href = (el as HTMLAnchorElement).getAttribute('href');
+    const text = directText(el);
+    if (text) return { tag, hint: clip(text) };
+    if (href) return { tag, hint: '→ ' + clip(href, 50) };
+    return { tag };
+  }
+
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') {
+    const ph = el.getAttribute('placeholder');
+    const name = el.getAttribute('name');
+    const type = el.getAttribute('type');
+    if (ph) return { tag, hint: 'placeholder: ' + clip(ph, 40) };
+    if (name) return { tag, hint: `name: ${name}${type ? ' (' + type + ')' : ''}` };
+    if (type) return { tag, hint: 'type: ' + type };
+    return { tag };
+  }
+
+  if (tag === 'button') {
+    const text = directText(el);
+    if (text) return { tag, hint: clip(text) };
+  }
+
+  // Generic: direct text content (first text-node child only — no recursion)
+  const text = directText(el);
+  if (text) return { tag, hint: clip(text) };
+
+  return { tag };
+}
+
 function buildNode(
   fiber: Fiber,
   counter: { n: number },
@@ -208,6 +278,7 @@ function buildNode(
   scrollY: number,
 ): ComponentNode {
   counter.n += 1;
+  const meta = readMetadata(fiber);
   const node: ComponentNode = {
     id: String(idCounter.n++),
     name: fiberName(fiber),
@@ -216,6 +287,8 @@ function buildNode(
     childrenCount: 0,
     children: [],
     bounds: readBounds(fiber, scrollX, scrollY),
+    tag: meta.tag,
+    hint: meta.hint,
   };
 
   let child = fiber.child;

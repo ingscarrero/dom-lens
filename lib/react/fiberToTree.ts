@@ -32,4 +32,8 @@ export interface ComponentNode {
   children: ComponentNode[];
   /** Bounding box of the first host descendant in document coordinates */
   bounds?: NodeBounds;
+  /** Tag name of the first host descendant (e.g. "button", "section"). */
+  tag?: string;
+  /** Short content caption derived from aria-label/title/alt/direct text/href. */
+  hint?: string;
 }

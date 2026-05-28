@@ -82,6 +82,26 @@ export default function App() {
     });
   }, [focused]);
 
+  // Best-effort cleanup if the DevTools panel iframe goes away.
+  // The background SW also runs a chrome.scripting cleanup on port
+  // disconnect — this is just the fast path that runs first.
+  useEffect(() => {
+    const cleanup = () => {
+      try {
+        callClearHighlight();
+      } catch {
+        /* ignore */
+      }
+    };
+    window.addEventListener('beforeunload', cleanup);
+    window.addEventListener('pagehide', cleanup);
+    return () => {
+      cleanup();
+      window.removeEventListener('beforeunload', cleanup);
+      window.removeEventListener('pagehide', cleanup);
+    };
+  }, []);
+
   const onCapture = async () => {
     const settings = useStore.getState().settings;
     const tabId = chrome.devtools.inspectedWindow.tabId;

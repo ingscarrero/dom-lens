@@ -34,6 +34,8 @@ export default defineBackground({
     chrome.runtime.onConnect.addListener((port) => {
       if (port.name !== 'panel') return;
 
+      let inspectedTabId: number | null = null;
+
       const send = (msg: BgToPanel) => {
         try {
           port.postMessage(msg);
@@ -45,6 +47,7 @@ export default defineBackground({
       port.onMessage.addListener(async (msg: PanelToBg) => {
         try {
           if (msg.type === 'panel.hello') {
+            inspectedTabId = msg.tabId;
             return;
           }
           if (msg.type === 'capture.tile') {
@@ -107,6 +110,26 @@ export default defineBackground({
         for (const [id, ctl] of activeStreams) {
           ctl.abort();
           activeStreams.delete(id);
+        }
+        // Clean up any leftover live-page overlay when DevTools closes.
+        if (inspectedTabId != null) {
+          chrome.scripting
+            .executeScript({
+              target: { tabId: inspectedTabId },
+              world: 'MAIN',
+              func: () => {
+                try {
+                  (window as any).__dom_lens__?.clearHighlight?.();
+                } catch {
+                  /* ignore */
+                }
+                const el = document.getElementById('__dom_lens_highlight__');
+                if (el) el.remove();
+              },
+            })
+            .catch(() => {
+              /* tab may have been closed already */
+            });
         }
       });
     });

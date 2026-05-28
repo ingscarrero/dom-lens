@@ -10,6 +10,8 @@ export interface FocusedComponent {
   id: string;
   name: string;
   kind: string;
+  tag?: string;
+  hint?: string;
   bounds?: { x: number; y: number; w: number; h: number };
 }
 
@@ -41,6 +43,8 @@ interface State {
   focused: FocusedComponent | null;
   tiles: Tile[];
   componentFilter: string;
+  significantOnly: boolean;
+  subtreeRootId: string | null;
 }
 
 interface Actions {
@@ -61,6 +65,8 @@ interface Actions {
   setFocused(f: FocusedComponent | null): void;
   setTiles(ts: Tile[]): void;
   setComponentFilter(s: string): void;
+  setSignificantOnly(v: boolean): void;
+  setSubtreeRootId(id: string | null): void;
 }
 
 export const useStore = create<State & Actions>((set) => ({
@@ -77,6 +83,8 @@ export const useStore = create<State & Actions>((set) => ({
   focused: null,
   tiles: [],
   componentFilter: '',
+  significantOnly: true,
+  subtreeRootId: null,
   setTab: (t) => set({ tab: t }),
   setCapturing: (v) =>
     set({ capturing: v, captureError: v ? null : undefined, captureProgress: v ? null : null }),
@@ -91,6 +99,7 @@ export const useStore = create<State & Actions>((set) => ({
       captureProgress: null,
       tiles: [],
       focused: null,
+      subtreeRootId: null,
       captureError: state.captureError,
     })),
   setCaptureError: (e) => set({ captureError: e, capturing: false, captureProgress: null }),
@@ -130,4 +139,6 @@ export const useStore = create<State & Actions>((set) => ({
   setFocused: (f) => set({ focused: f }),
   setTiles: (ts) => set({ tiles: ts }),
   setComponentFilter: (s) => set({ componentFilter: s }),
+  setSignificantOnly: (v) => set({ significantOnly: v }),
+  setSubtreeRootId: (id) => set({ subtreeRootId: id }),
 }));
