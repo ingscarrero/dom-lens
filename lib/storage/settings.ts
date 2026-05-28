@@ -10,6 +10,14 @@ export interface Settings {
   includeConsole: boolean;
   maxMarkdownChars: number;
   systemPrompt: string;
+  /** Capture entire page via scroll-and-stitch (vs visible viewport only) */
+  fullPageScreenshot: boolean;
+  /** Max number of viewport tiles to capture during scroll-and-stitch */
+  fullPageMaxTiles: number;
+  /** Default number of slices to cut a stitched image into */
+  defaultSliceCount: number;
+  /** Send sliced tiles instead of full image to multimodal models */
+  sendSlicedTiles: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -23,6 +31,10 @@ export const DEFAULT_SETTINGS: Settings = {
   includeNetwork: false,
   includeConsole: true,
   maxMarkdownChars: 20000,
+  fullPageScreenshot: true,
+  fullPageMaxTiles: 20,
+  defaultSliceCount: 4,
+  sendSlicedTiles: true,
   systemPrompt:
     'You are a senior frontend engineer reviewing a web page snapshot. ' +
     'You receive a semantic markdown representation of the page DOM, ' +

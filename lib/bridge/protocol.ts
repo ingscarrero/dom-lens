@@ -1,17 +1,15 @@
-import type { PartialSnapshot, Snapshot, HarEntry } from '../snapshot/types';
-
 export const CHANNEL = 'dom-lens';
 
 export type PanelToBg =
   | { type: 'panel.hello'; tabId: number }
-  | { type: 'capture.finalize'; tabId: number; partial: PartialSnapshot; network: HarEntry[] }
+  | { type: 'capture.tile'; requestId: string; tabId: number }
   | { type: 'lm.chat.start'; requestId: string; payload: LmChatPayload }
   | { type: 'lm.chat.cancel'; requestId: string }
   | { type: 'lm.test'; baseUrl: string; apiKey?: string };
 
 export type BgToPanel =
-  | { type: 'capture.result'; snapshot: Snapshot }
-  | { type: 'capture.error'; message: string }
+  | { type: 'capture.tile.result'; requestId: string; ok: true; dataUrl: string }
+  | { type: 'capture.tile.result'; requestId: string; ok: false; message: string }
   | { type: 'lm.chat.delta'; requestId: string; text: string }
   | { type: 'lm.chat.done'; requestId: string }
   | { type: 'lm.chat.error'; requestId: string; message: string }

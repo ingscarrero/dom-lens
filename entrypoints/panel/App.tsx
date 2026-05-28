@@ -1,8 +1,7 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useStore, type Tab } from './store';
 import { usePort } from './hooks/usePort';
 import { useNetwork } from './hooks/useNetwork';
-import { callDomLensCapture } from './hooks/useInspectedEval';
 import { loadSettings, onSettingsChanged } from '@/lib/storage/settings';
 import SnapshotTab from './tabs/SnapshotTab';
 import ComponentsTab from './tabs/ComponentsTab';
@@ -10,6 +9,8 @@ import FederationTab from './tabs/FederationTab';
 import AnalyzeTab from './tabs/AnalyzeTab';
 import SettingsTab from './tabs/SettingsTab';
 import type { BgToPanel } from '@/lib/bridge/protocol';
+import { runCapture } from './captureFlow';
+import { callClearHighlight, callHighlight } from './hooks/useInspectedEval';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'snapshot', label: 'Snapshot' },
@@ -23,25 +24,28 @@ export default function App() {
   const tab = useStore((s) => s.tab);
   const setTab = useStore((s) => s.setTab);
   const capturing = useStore((s) => s.capturing);
+  const captureProgress = useStore((s) => s.captureProgress);
   const captureError = useStore((s) => s.captureError);
-  const setCapturing = useStore((s) => s.setCapturing);
-  const setSnapshot = useStore((s) => s.setSnapshot);
-  const setCaptureError = useStore((s) => s.setCaptureError);
   const setSettings = useStore((s) => s.setSettings);
   const appendChatDelta = useStore((s) => s.appendChatDelta);
   const endChat = useStore((s) => s.endChat);
   const setTestConnection = useStore((s) => s.setTestConnection);
   const setChatRequestId = useStore((s) => s.setChatRequestId);
+  const focused = useStore((s) => s.focused);
 
   useNetwork();
 
+  // Track in-flight tile.capture promises by requestId
+  const tileWaitersRef = useRef(new Map<string, (r: { ok: true; dataUrl: string } | { ok: false; message: string }) => void>());
+
   const port = usePort((msg: BgToPanel) => {
-    if (msg.type === 'capture.result') {
-      setSnapshot(msg.snapshot);
-      // clear network buffer after stamping snapshot
-      useStore.getState().clearNetwork();
-    } else if (msg.type === 'capture.error') {
-      setCaptureError(msg.message);
+    if (msg.type === 'capture.tile.result') {
+      const waiter = tileWaitersRef.current.get(msg.requestId);
+      if (waiter) {
+        tileWaitersRef.current.delete(msg.requestId);
+        if (msg.ok) waiter({ ok: true, dataUrl: msg.dataUrl });
+        else waiter({ ok: false, message: msg.message });
+      }
     } else if (msg.type === 'lm.chat.delta') {
       appendChatDelta(msg.text);
     } else if (msg.type === 'lm.chat.done') {
@@ -62,22 +66,36 @@ export default function App() {
     return onSettingsChanged(setSettings);
   }, [setSettings]);
 
-  const onCapture = async () => {
-    setCapturing(true);
-    const settings = useStore.getState().settings;
-    const network = useStore.getState().network;
-    const tabId = chrome.devtools.inspectedWindow.tabId;
-    const result = await callDomLensCapture(settings.maxMarkdownChars);
-    if (!result.ok) {
-      setCaptureError(result.reason);
+  // Sync live page overlay with selected component
+  useEffect(() => {
+    if (!focused?.bounds) {
+      callClearHighlight();
       return;
     }
-    port.post({
-      type: 'capture.finalize',
-      tabId,
-      partial: result.partial,
-      network,
+    callHighlight({
+      x: focused.bounds.x,
+      y: focused.bounds.y,
+      w: focused.bounds.w,
+      h: focused.bounds.h,
+      label: focused.name,
+      color: '#0ea5e9',
     });
+  }, [focused]);
+
+  const onCapture = async () => {
+    const settings = useStore.getState().settings;
+    const tabId = chrome.devtools.inspectedWindow.tabId;
+    await runCapture(
+      {
+        tabId,
+        post: (m) => port.post(m),
+        awaitTileResult: (requestId) =>
+          new Promise((resolve) => {
+            tileWaitersRef.current.set(requestId, resolve);
+          }),
+      },
+      settings,
+    );
   };
 
   const onAnalyzeCancel = () => {
@@ -94,9 +112,16 @@ export default function App() {
       <header className="flex items-center justify-between border-b border-panel-border bg-panel-surface px-3 py-2">
         <div className="flex items-center gap-2">
           <span className="text-sm font-semibold">DOM Lens</span>
-          <span className="text-xs text-panel-muted">v0.1.0</span>
+          <span className="text-xs text-panel-muted">v0.2.0</span>
         </div>
         <div className="flex items-center gap-2">
+          {capturing && captureProgress && (
+            <span className="text-xs text-panel-muted">
+              {captureProgress.phase === 'tiles'
+                ? `Tile ${captureProgress.step}/${captureProgress.total}…`
+                : captureProgress.phase}
+            </span>
+          )}
           <button
             type="button"
             className="rounded bg-panel-accent px-3 py-1 text-xs font-medium text-white hover:bg-sky-400 disabled:opacity-50"

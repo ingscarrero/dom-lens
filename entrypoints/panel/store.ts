@@ -1,9 +1,23 @@
 import { create } from 'zustand';
 import type { Snapshot, HarEntry } from '@/lib/snapshot/types';
 import type { Settings } from '@/lib/storage/settings';
+import type { Tile } from '@/lib/snapshot/slicer';
 import { DEFAULT_SETTINGS } from '@/lib/storage/settings';
 
 export type Tab = 'snapshot' | 'components' | 'federation' | 'analyze' | 'settings';
+
+export interface FocusedComponent {
+  id: string;
+  name: string;
+  kind: string;
+  bounds?: { x: number; y: number; w: number; h: number };
+}
+
+export interface CaptureProgress {
+  step: number;
+  total: number;
+  phase: 'metrics' | 'tiles' | 'stitching' | 'finalizing';
+}
 
 export interface ChatTurn {
   id: string;
@@ -17,17 +31,22 @@ interface State {
   tab: Tab;
   snapshot: Snapshot | null;
   capturing: boolean;
+  captureProgress: CaptureProgress | null;
   captureError: string | null;
   network: HarEntry[];
   settings: Settings;
   chat: ChatTurn[];
   chatRequestId: string | null;
   testConnection: { status: 'idle' | 'pending' | 'ok' | 'error'; message?: string; models?: string[] };
+  focused: FocusedComponent | null;
+  tiles: Tile[];
+  componentFilter: string;
 }
 
 interface Actions {
   setTab(t: Tab): void;
   setCapturing(v: boolean): void;
+  setCaptureProgress(p: CaptureProgress | null): void;
   setSnapshot(s: Snapshot): void;
   setCaptureError(e: string | null): void;
   pushNetwork(e: HarEntry): void;
@@ -39,22 +58,32 @@ interface Actions {
   resetChat(): void;
   setTestConnection(v: State['testConnection']): void;
   setChatRequestId(id: string | null): void;
+  setFocused(f: FocusedComponent | null): void;
+  setTiles(ts: Tile[]): void;
+  setComponentFilter(s: string): void;
 }
 
 export const useStore = create<State & Actions>((set) => ({
   tab: 'snapshot',
   snapshot: null,
   capturing: false,
+  captureProgress: null,
   captureError: null,
   network: [],
   settings: DEFAULT_SETTINGS,
   chat: [],
   chatRequestId: null,
   testConnection: { status: 'idle' },
+  focused: null,
+  tiles: [],
+  componentFilter: '',
   setTab: (t) => set({ tab: t }),
-  setCapturing: (v) => set({ capturing: v, captureError: v ? null : undefined }),
-  setSnapshot: (s) => set({ snapshot: s, capturing: false, captureError: null }),
-  setCaptureError: (e) => set({ captureError: e, capturing: false }),
+  setCapturing: (v) =>
+    set({ capturing: v, captureError: v ? null : undefined, captureProgress: v ? null : null }),
+  setCaptureProgress: (p) => set({ captureProgress: p }),
+  setSnapshot: (s) =>
+    set({ snapshot: s, capturing: false, captureError: null, captureProgress: null, tiles: [], focused: null }),
+  setCaptureError: (e) => set({ captureError: e, capturing: false, captureProgress: null }),
   pushNetwork: (e) =>
     set((s) => {
       const next = [...s.network, e];
@@ -88,4 +117,7 @@ export const useStore = create<State & Actions>((set) => ({
   resetChat: () => set({ chat: [], chatRequestId: null }),
   setTestConnection: (v) => set({ testConnection: v }),
   setChatRequestId: (id) => set({ chatRequestId: id }),
+  setFocused: (f) => set({ focused: f }),
+  setTiles: (ts) => set({ tiles: ts }),
+  setComponentFilter: (s) => set({ componentFilter: s }),
 }));

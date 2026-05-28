@@ -35,6 +35,25 @@ export function inspectedEval<T = unknown>(expression: string): Promise<EvalResu
   });
 }
 
+function parseJsonResult<T>(res: EvalResult<string>): { ok: true; value: T } | { ok: false; reason: string } {
+  if (res.isError) return { ok: false, reason: res.description };
+  if (typeof res.value !== 'string') return { ok: false, reason: 'unexpected non-string eval result' };
+  try {
+    const parsed = JSON.parse(res.value);
+    if (parsed && parsed.__no_api) {
+      return {
+        ok: false,
+        reason:
+          'DOM Lens main-world script not present on this page. Reload the page after installing the extension.',
+      };
+    }
+    if (parsed && parsed.__error) return { ok: false, reason: parsed.__error };
+    return { ok: true, value: parsed as T };
+  } catch (e) {
+    return { ok: false, reason: `JSON parse failed: ${(e as Error).message}` };
+  }
+}
+
 export async function callDomLensCapture(maxMarkdownChars: number): Promise<
   | { ok: true; partial: import('@/lib/snapshot/types').PartialSnapshot }
   | { ok: false; reason: string }
@@ -45,21 +64,49 @@ export async function callDomLensCapture(maxMarkdownChars: number): Promise<
     catch (e) { return JSON.stringify({ __error: (e && e.message) || String(e) }); }
   })()`;
   const res = await inspectedEval<string>(expr);
-  if (res.isError) return { ok: false, reason: res.description };
-  if (typeof res.value !== 'string') return { ok: false, reason: 'unexpected non-string eval result' };
-  try {
-    const parsed = JSON.parse(res.value);
-    if (parsed && parsed.__no_api) {
-      return {
-        ok: false,
-        reason: 'DOM Lens main-world script not present on this page. Reload the page after installing the extension.',
-      };
-    }
-    if (parsed && parsed.__error) {
-      return { ok: false, reason: parsed.__error };
-    }
-    return { ok: true, partial: parsed };
-  } catch (e) {
-    return { ok: false, reason: `JSON parse failed: ${(e as Error).message}` };
-  }
+  const parsed = parseJsonResult<import('@/lib/snapshot/types').PartialSnapshot>(res);
+  if (!parsed.ok) return parsed;
+  return { ok: true, partial: parsed.value };
+}
+
+export async function callScrollMetrics(): Promise<
+  | { ok: true; metrics: import('@/lib/snapshot/types').PageMetrics }
+  | { ok: false; reason: string }
+> {
+  const expr = `(function(){
+    if (!window.__dom_lens__) return JSON.stringify({ __no_api: true });
+    try { return JSON.stringify(window.__dom_lens__.scrollMetrics()); }
+    catch (e) { return JSON.stringify({ __error: (e && e.message) || String(e) }); }
+  })()`;
+  const res = await inspectedEval<string>(expr);
+  const parsed = parseJsonResult<import('@/lib/snapshot/types').PageMetrics>(res);
+  if (!parsed.ok) return parsed;
+  return { ok: true, metrics: parsed.value };
+}
+
+export async function callScrollTo(x: number, y: number): Promise<void> {
+  await inspectedEval<string>(
+    `(function(){ try { window.__dom_lens__ && window.__dom_lens__.scrollTo(${x}, ${y}); } catch(e) {} return 'ok'; })()`,
+  );
+}
+
+export async function callHighlight(rect: {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  label?: string;
+  color?: string;
+}): Promise<void> {
+  const safeLabel = JSON.stringify(rect.label ?? '');
+  const safeColor = JSON.stringify(rect.color ?? '#0ea5e9');
+  await inspectedEval<string>(
+    `(function(){ try { window.__dom_lens__ && window.__dom_lens__.highlight({x:${rect.x},y:${rect.y},w:${rect.w},h:${rect.h},label:${safeLabel},color:${safeColor}}); } catch(e) {} return 'ok'; })()`,
+  );
+}
+
+export async function callClearHighlight(): Promise<void> {
+  await inspectedEval<string>(
+    `(function(){ try { window.__dom_lens__ && window.__dom_lens__.clearHighlight(); } catch(e) {} return 'ok'; })()`,
+  );
 }

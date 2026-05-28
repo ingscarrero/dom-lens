@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useStore } from '../store';
 import type { LmChatPayload, ChatMessage } from '@/lib/bridge/protocol';
-import { buildSnapshotPrompt } from '@/lib/lm-studio/client';
+import { buildSnapshotPrompt, type SnapshotImage } from '@/lib/lm-studio/client';
 import type { Snapshot } from '@/lib/snapshot/types';
 
 interface Props {
@@ -69,6 +69,7 @@ function topNames(
 export default function AnalyzeTab({ onSend, onCancel }: Props) {
   const snap = useStore((s) => s.snapshot);
   const settings = useStore((s) => s.settings);
+  const tiles = useStore((s) => s.tiles);
   const chat = useStore((s) => s.chat);
   const startChat = useStore((s) => s.startChat);
   const resetChat = useStore((s) => s.resetChat);
@@ -78,10 +79,26 @@ export default function AnalyzeTab({ onSend, onCancel }: Props) {
   const send = () => {
     if (!snap || !input.trim() || chatRequestId) return;
 
+    const images: SnapshotImage[] = [];
+    if (settings.includeScreenshot && snap.screenshot) {
+      if (settings.sendSlicedTiles && tiles.length > 0) {
+        const orientationHint =
+          tiles[0]?.x === tiles[1]?.x ? 'top → bottom' : 'left → right';
+        for (const t of tiles) {
+          images.push({
+            url: t.dataUrl,
+            caption: `Tile ${t.index}/${t.total} (${orientationHint})`,
+          });
+        }
+      } else {
+        images.push({ url: snap.screenshot.dataUrl });
+      }
+    }
+
     const userMsg = buildSnapshotPrompt(
       input.trim(),
       settings.includeMarkdown ? snap.dom.markdown : undefined,
-      settings.includeScreenshot ? snap.screenshot?.dataUrl : undefined,
+      images,
       {
         reactSummary: settings.includeReactTree ? summarizeReact(snap) : undefined,
         federationSummary: settings.includeFederation ? summarizeFederation(snap) : undefined,
@@ -91,10 +108,14 @@ export default function AnalyzeTab({ onSend, onCancel }: Props) {
 
     const turnId = crypto.randomUUID();
     const requestId = crypto.randomUUID();
+    const imageNote =
+      images.length === 0
+        ? ''
+        : images.length === 1
+          ? ' (+ snapshot + image)'
+          : ` (+ snapshot + ${images.length} tiles)`;
     const visibleText =
-      typeof userMsg.content === 'string'
-        ? input.trim()
-        : input.trim() + ' (+ snapshot' + (settings.includeScreenshot && snap.screenshot ? ' + image)' : ')');
+      typeof userMsg.content === 'string' ? input.trim() : input.trim() + imageNote;
 
     startChat({ id: turnId, role: 'user', content: visibleText });
     setInput('');

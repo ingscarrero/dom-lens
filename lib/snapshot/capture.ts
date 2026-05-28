@@ -1,7 +1,30 @@
 import { serializeDom } from './serializeDom';
 import { walkAllFiberRoots } from '../react/walkFiber';
 import { detectFederation } from '../federation/detect';
-import type { ConsoleEntry, PartialSnapshot } from './types';
+import type { ConsoleEntry, PageMetrics, PartialSnapshot } from './types';
+
+export function readPageMetrics(): PageMetrics {
+  const sw = Math.max(
+    document.documentElement.scrollWidth,
+    document.body?.scrollWidth ?? 0,
+    window.innerWidth,
+  );
+  const sh = Math.max(
+    document.documentElement.scrollHeight,
+    document.body?.scrollHeight ?? 0,
+    window.innerHeight,
+  );
+  return {
+    scrollX: window.scrollX,
+    scrollY: window.scrollY,
+    scrollWidth: sw,
+    scrollHeight: sh,
+    viewportWidth: window.innerWidth,
+    viewportHeight: window.innerHeight,
+    devicePixelRatio: window.devicePixelRatio || 1,
+    orientation: sw > sh * 1.2 ? 'horizontal' : 'vertical',
+  };
+}
 
 export interface ConsoleBuffer {
   push(entry: ConsoleEntry): void;
@@ -57,5 +80,6 @@ export function runCapture(
       height: window.innerHeight,
       devicePixelRatio: window.devicePixelRatio,
     },
+    pageMetrics: readPageMetrics(),
   };
 }

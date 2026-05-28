@@ -1,4 +1,4 @@
-import type { ChatMessage, LmChatPayload } from '../bridge/protocol';
+import type { ChatMessage, ContentPart, LmChatPayload } from '../bridge/protocol';
 
 export interface StreamChunk {
   delta: string;
@@ -101,10 +101,15 @@ export async function listModels(
   }
 }
 
+export interface SnapshotImage {
+  url: string; // dataURL
+  caption?: string; // e.g. "Tile 2/4 — vertical, top→bottom"
+}
+
 export function buildSnapshotPrompt(
   userMessage: string,
   snapshotMarkdown: string | undefined,
-  screenshotDataUrl: string | undefined,
+  images: SnapshotImage[],
   extras: { reactSummary?: string; federationSummary?: string; consoleSummary?: string },
 ): ChatMessage {
   const parts: string[] = [];
@@ -114,19 +119,24 @@ export function buildSnapshotPrompt(
   if (extras.reactSummary) parts.push('## React component tree\n\n' + extras.reactSummary);
   if (extras.federationSummary) parts.push('## Module Federation\n\n' + extras.federationSummary);
   if (extras.consoleSummary) parts.push('## Console\n\n' + extras.consoleSummary);
+  if (images.length > 1) {
+    parts.push(
+      `## Screenshot tiles\n\nThe page screenshot was sliced into ${images.length} sequential tiles. ` +
+        `Treat them as a single image in reading order. Captions identify the sequence.`,
+    );
+  }
   parts.push('## User question\n\n' + userMessage);
 
   const text = parts.join('\n\n---\n\n');
 
-  if (!screenshotDataUrl) {
+  if (images.length === 0) {
     return { role: 'user', content: text };
   }
 
-  return {
-    role: 'user',
-    content: [
-      { type: 'text', text },
-      { type: 'image_url', image_url: { url: screenshotDataUrl } },
-    ],
-  };
+  const content: ContentPart[] = [{ type: 'text', text }];
+  for (const img of images) {
+    if (img.caption) content.push({ type: 'text', text: img.caption });
+    content.push({ type: 'image_url', image_url: { url: img.url } });
+  }
+  return { role: 'user', content };
 }

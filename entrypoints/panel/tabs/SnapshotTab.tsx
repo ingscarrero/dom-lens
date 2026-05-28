@@ -1,9 +1,46 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../store';
+import { sliceImage, suggestSliceCount } from '@/lib/snapshot/slicer';
 
 export default function SnapshotTab() {
   const snap = useStore((s) => s.snapshot);
+  const settings = useStore((s) => s.settings);
+  const focused = useStore((s) => s.focused);
+  const tiles = useStore((s) => s.tiles);
+  const setTiles = useStore((s) => s.setTiles);
+
   const [showJson, setShowJson] = useState(false);
+  const [orientationOverride, setOrientationOverride] = useState<'auto' | 'vertical' | 'horizontal'>('auto');
+  const [sliceCount, setSliceCount] = useState<number>(settings.defaultSliceCount);
+  const [slicing, setSlicing] = useState(false);
+  const [sliceError, setSliceError] = useState<string | null>(null);
+
+  const imgRef = useRef<HTMLImageElement | null>(null);
+  const [imgClient, setImgClient] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
+
+  useEffect(() => {
+    if (!imgRef.current) return;
+    const el = imgRef.current;
+    const measure = () => setImgClient({ w: el.clientWidth, h: el.clientHeight });
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [snap?.id]);
+
+  const orientation = useMemo<'vertical' | 'horizontal'>(() => {
+    if (orientationOverride !== 'auto') return orientationOverride;
+    return snap?.screenshot?.orientation ?? 'vertical';
+  }, [orientationOverride, snap]);
+
+  const autoSuggestedSlices = useMemo(() => {
+    if (!snap?.screenshot) return 1;
+    const longest =
+      orientation === 'vertical'
+        ? snap.screenshot.pixelHeight
+        : snap.screenshot.pixelWidth;
+    return suggestSliceCount(longest, 2048);
+  }, [snap, orientation]);
 
   if (!snap) {
     return (
@@ -12,6 +49,37 @@ export default function SnapshotTab() {
       </div>
     );
   }
+
+  const screenshot = snap.screenshot;
+  const overlayBox = focused?.bounds && screenshot
+    ? (() => {
+        const scale = imgClient.w / screenshot.width;
+        return {
+          left: Math.max(0, focused.bounds.x * scale),
+          top: Math.max(0, focused.bounds.y * scale),
+          width: Math.max(2, focused.bounds.w * scale),
+          height: Math.max(2, focused.bounds.h * scale),
+        };
+      })()
+    : null;
+
+  const runSlice = async () => {
+    if (!screenshot) return;
+    setSlicing(true);
+    setSliceError(null);
+    try {
+      const result = await sliceImage(screenshot.dataUrl, {
+        count: sliceCount,
+        orientation,
+        overlap: 24,
+      });
+      setTiles(result);
+    } catch (e) {
+      setSliceError((e as Error).message);
+    } finally {
+      setSlicing(false);
+    }
+  };
 
   return (
     <div className="scrollbar-thin h-full overflow-auto p-3 text-xs">
@@ -25,20 +93,142 @@ export default function SnapshotTab() {
           <div className="mb-1 text-[10px] uppercase text-panel-muted">Captured</div>
           <div>{new Date(snap.capturedAt).toLocaleString()}</div>
           <div className="text-panel-muted">
-            {snap.viewport.width}×{snap.viewport.height} · {snap.dom.charCount.toLocaleString()} md chars ·{' '}
-            {snap.network.length} net · {snap.console.length} console
+            {snap.pageMetrics.scrollWidth}×{snap.pageMetrics.scrollHeight} doc ·{' '}
+            {snap.pageMetrics.viewportWidth}×{snap.pageMetrics.viewportHeight} vp ·{' '}
+            {snap.dom.charCount.toLocaleString()} md · {snap.network.length} net · {snap.console.length} console
           </div>
         </div>
       </div>
 
-      {snap.screenshot && (
+      {screenshot && (
         <div className="mb-3 rounded border border-panel-border bg-panel-surface p-2">
-          <div className="mb-1 text-[10px] uppercase text-panel-muted">Screenshot (visible viewport)</div>
-          <img
-            src={snap.screenshot.dataUrl}
-            alt="page screenshot"
-            className="max-h-64 w-auto rounded border border-panel-border"
-          />
+          <div className="mb-1 flex items-center justify-between">
+            <div className="text-[10px] uppercase text-panel-muted">
+              Screenshot — {screenshot.kind === 'fullpage' ? 'full page' : 'visible viewport'} ·{' '}
+              {screenshot.width}×{screenshot.height} · {screenshot.tileCount} tile(s) ·{' '}
+              {screenshot.orientation}
+            </div>
+            <a
+              href={screenshot.dataUrl}
+              download={`dom-lens-${snap.id.slice(0, 8)}.png`}
+              className="text-[10px] text-panel-accent hover:underline"
+            >
+              download
+            </a>
+          </div>
+          <div
+            className="scrollbar-thin relative max-h-96 overflow-auto rounded border border-panel-border bg-black/30"
+            style={{ resize: 'vertical' }}
+          >
+            <div className="relative inline-block min-w-full">
+              <img
+                ref={imgRef}
+                src={screenshot.dataUrl}
+                alt="page screenshot"
+                className="block w-full"
+                style={{ imageRendering: 'auto' }}
+              />
+              {overlayBox && (
+                <div
+                  className="pointer-events-none absolute border-2 border-sky-400 bg-sky-400/20"
+                  style={overlayBox}
+                >
+                  {focused && (
+                    <div className="absolute -top-5 left-0 whitespace-nowrap rounded bg-sky-500 px-1 text-[10px] text-white">
+                      {focused.name}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
+            <span className="text-panel-muted">Slice into</span>
+            <input
+              type="number"
+              min={1}
+              max={16}
+              value={sliceCount}
+              onChange={(e) => setSliceCount(Math.max(1, Math.min(16, parseInt(e.target.value || '1', 10))))}
+              className="w-14 rounded border border-panel-border bg-black/30 px-1 py-0.5 text-panel-text"
+            />
+            <span className="text-panel-muted">tiles ·</span>
+            <select
+              value={orientationOverride}
+              onChange={(e) => setOrientationOverride(e.target.value as any)}
+              className="rounded border border-panel-border bg-black/30 px-1 py-0.5 text-panel-text"
+            >
+              <option value="auto">auto ({screenshot.orientation})</option>
+              <option value="vertical">vertical</option>
+              <option value="horizontal">horizontal</option>
+            </select>
+            <button
+              type="button"
+              className="rounded bg-panel-accent px-2 py-0.5 text-white hover:bg-sky-400 disabled:opacity-50"
+              onClick={runSlice}
+              disabled={slicing}
+            >
+              {slicing ? 'Slicing…' : 'Slice'}
+            </button>
+            <button
+              type="button"
+              className="text-panel-accent hover:underline"
+              onClick={() => setSliceCount(autoSuggestedSlices)}
+            >
+              suggest ({autoSuggestedSlices})
+            </button>
+            {tiles.length > 0 && (
+              <button
+                type="button"
+                className="text-panel-muted hover:text-white"
+                onClick={() => setTiles([])}
+              >
+                clear
+              </button>
+            )}
+            {sliceError && <span className="text-red-300">{sliceError}</span>}
+          </div>
+
+          {tiles.length > 0 && (
+            <div className="mt-2">
+              <div className="mb-1 text-[10px] uppercase text-panel-muted">
+                Tiles in sequence ({orientation === 'vertical' ? 'top → bottom' : 'left → right'})
+              </div>
+              <div
+                className={
+                  'flex gap-2 ' +
+                  (orientation === 'vertical' ? 'flex-col' : 'flex-row overflow-x-auto')
+                }
+              >
+                {tiles.map((t) => (
+                  <div
+                    key={t.index}
+                    className="rounded border border-panel-border bg-black/40 p-1"
+                    style={
+                      orientation === 'horizontal'
+                        ? { minWidth: 160, maxWidth: 240 }
+                        : undefined
+                    }
+                  >
+                    <div className="mb-1 flex items-center justify-between text-[10px] text-panel-muted">
+                      <span>
+                        {t.index}/{t.total}
+                      </span>
+                      <a
+                        href={t.dataUrl}
+                        download={`dom-lens-${snap.id.slice(0, 8)}-tile-${t.index}.png`}
+                        className="text-panel-accent hover:underline"
+                      >
+                        download
+                      </a>
+                    </div>
+                    <img src={t.dataUrl} alt={`tile ${t.index}`} className="block max-h-48 w-full object-contain" />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -86,7 +276,11 @@ export default function SnapshotTab() {
         </button>
         {showJson && (
           <pre className="scrollbar-thin mt-2 max-h-80 overflow-auto whitespace-pre rounded bg-black/30 p-2 font-mono text-[10px]">
-{JSON.stringify(snap, null, 2)}
+{JSON.stringify(
+  snap,
+  (k, v) => (k === 'dataUrl' ? '[image dataURL omitted]' : v),
+  2,
+)}
           </pre>
         )}
       </div>

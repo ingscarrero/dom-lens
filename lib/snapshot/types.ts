@@ -27,6 +27,18 @@ export interface WebVitals {
   TTFB?: number;
 }
 
+export interface PageMetrics {
+  scrollX: number;
+  scrollY: number;
+  scrollWidth: number;
+  scrollHeight: number;
+  viewportWidth: number;
+  viewportHeight: number;
+  devicePixelRatio: number;
+  /** Layout flow inferred from scroll dimensions. */
+  orientation: 'vertical' | 'horizontal';
+}
+
 export interface PartialSnapshot {
   url: string;
   title: string;
@@ -36,11 +48,32 @@ export interface PartialSnapshot {
   console: ConsoleEntry[];
   webVitals?: WebVitals;
   viewport: { width: number; height: number; devicePixelRatio: number };
+  pageMetrics: PageMetrics;
+}
+
+export type ScreenshotKind = 'viewport' | 'fullpage';
+
+export interface SnapshotScreenshot {
+  /** A stitched (or single-viewport) PNG dataURL */
+  dataUrl: string;
+  /** Logical (CSS) px dimensions */
+  width: number;
+  height: number;
+  /** Image pixel dimensions (logical × DPR) */
+  pixelWidth: number;
+  pixelHeight: number;
+  /** Origin in document coords (0,0 for full-page; scroll position for viewport) */
+  originX: number;
+  originY: number;
+  /** Number of viewport tiles used to compose */
+  tileCount: number;
+  kind: ScreenshotKind;
+  orientation: 'vertical' | 'horizontal';
 }
 
 export interface Snapshot extends PartialSnapshot {
   id: string;
   capturedAt: number;
-  screenshot: { dataUrl: string; width: number; height: number } | null;
+  screenshot: SnapshotScreenshot | null;
   network: HarEntry[];
 }

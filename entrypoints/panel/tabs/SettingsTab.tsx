@@ -86,6 +86,60 @@ export default function SettingsTab({ onTestConnection }: Props) {
       </section>
 
       <section className="mb-6 max-w-xl space-y-2">
+        <h3 className="text-sm font-semibold">Screenshot capture</h3>
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={local.fullPageScreenshot}
+            onChange={(e) => save({ ...local, fullPageScreenshot: e.target.checked })}
+          />
+          <span>
+            Capture full page (scroll-and-stitch). Disable for visible-viewport only — faster.
+          </span>
+        </label>
+        <label className="block">
+          <span className="text-panel-muted">Max tiles for scroll-and-stitch</span>
+          <input
+            type="number"
+            min={1}
+            max={60}
+            className={field}
+            value={local.fullPageMaxTiles}
+            onChange={(e) =>
+              save({ ...local, fullPageMaxTiles: Math.max(1, parseInt(e.target.value || '1', 10)) })
+            }
+          />
+          <span className="text-[10px] text-panel-muted">
+            Pages requiring more tiles fall back to a viewport screenshot. Chrome enforces a
+            captureVisibleTab quota (~2 calls/sec); high tile counts will be slow.
+          </span>
+        </label>
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={local.sendSlicedTiles}
+            onChange={(e) => save({ ...local, sendSlicedTiles: e.target.checked })}
+          />
+          <span>
+            When tiles have been sliced, send them as ordered tiles instead of the full image.
+          </span>
+        </label>
+        <label className="block">
+          <span className="text-panel-muted">Default slice count (1–16)</span>
+          <input
+            type="number"
+            min={1}
+            max={16}
+            className={field}
+            value={local.defaultSliceCount}
+            onChange={(e) =>
+              save({ ...local, defaultSliceCount: Math.max(1, Math.min(16, parseInt(e.target.value || '1', 10))) })
+            }
+          />
+        </label>
+      </section>
+
+      <section className="mb-6 max-w-xl space-y-2">
         <h3 className="text-sm font-semibold">Snapshot composition</h3>
         {(
           [

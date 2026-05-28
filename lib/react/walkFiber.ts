@@ -1,4 +1,4 @@
-import type { ComponentNode, FiberKind } from './fiberToTree';
+import type { ComponentNode, FiberKind, NodeBounds } from './fiberToTree';
 
 interface Fiber {
   tag: number;
@@ -226,7 +226,46 @@ function fiberName(fiber: Fiber): string {
 
 const MAX_NODES = 5000;
 
-function buildNode(fiber: Fiber, counter: { n: number }, idCounter: { n: number }): ComponentNode {
+function findHostNode(fiber: Fiber | null): Node | null {
+  if (!fiber) return null;
+  if (fiber.tag === 5 || fiber.tag === 6) return fiber.stateNode as Node | null;
+  if (fiber.stateNode && (fiber.stateNode as any).nodeType === 1) {
+    return fiber.stateNode as Node;
+  }
+  // DFS into children
+  let cur = fiber.child;
+  while (cur) {
+    const found = findHostNode(cur);
+    if (found) return found;
+    cur = cur.sibling;
+  }
+  return null;
+}
+
+function readBounds(fiber: Fiber, scrollX: number, scrollY: number): NodeBounds | undefined {
+  const node = findHostNode(fiber);
+  if (!node || (node as Element).nodeType !== 1) return undefined;
+  try {
+    const rect = (node as Element).getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) return undefined;
+    return {
+      x: Math.round(rect.left + scrollX),
+      y: Math.round(rect.top + scrollY),
+      w: Math.round(rect.width),
+      h: Math.round(rect.height),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function buildNode(
+  fiber: Fiber,
+  counter: { n: number },
+  idCounter: { n: number },
+  scrollX: number,
+  scrollY: number,
+): ComponentNode {
   counter.n += 1;
   const node: ComponentNode = {
     id: String(idCounter.n++),
@@ -235,6 +274,7 @@ function buildNode(fiber: Fiber, counter: { n: number }, idCounter: { n: number 
     key: fiber.key ?? undefined,
     childrenCount: 0,
     children: [],
+    bounds: readBounds(fiber, scrollX, scrollY),
   };
 
   let child = fiber.child;
@@ -243,11 +283,11 @@ function buildNode(fiber: Fiber, counter: { n: number }, idCounter: { n: number 
     if (skipHost) {
       let grand = child.child;
       while (grand && counter.n < MAX_NODES) {
-        node.children.push(buildNode(grand, counter, idCounter));
+        node.children.push(buildNode(grand, counter, idCounter, scrollX, scrollY));
         grand = grand.sibling;
       }
     } else {
-      node.children.push(buildNode(child, counter, idCounter));
+      node.children.push(buildNode(child, counter, idCounter, scrollX, scrollY));
     }
     child = child.sibling;
   }
@@ -267,9 +307,11 @@ export function walkAllFiberRoots(): ReactTreeResult | null {
   const idCounter = { n: 0 };
   const counter = { n: 0 };
   const trees: ComponentNode[] = [];
+  const scrollX = window.scrollX;
+  const scrollY = window.scrollY;
   for (const root of roots) {
     if (!root.current) continue;
-    trees.push(buildNode(root.current, counter, idCounter));
+    trees.push(buildNode(root.current, counter, idCounter, scrollX, scrollY));
   }
   return {
     rootCount: roots.length,
