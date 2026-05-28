@@ -19,12 +19,24 @@ interface FiberRoot {
 
 interface DevtoolsHook {
   supportsFiber: boolean;
+  supportsFlight?: boolean;
   renderers: Map<number, any>;
+  rendererInterfaces?: Map<number, any>;
+  helpers?: Map<number, any>;
+  listeners?: Record<string, Set<(data: any) => void>>;
+  emit?: (event: string, data: any) => void;
+  sub?: (event: string, fn: (data: any) => void) => () => void;
+  on?: (event: string, fn: (data: any) => void) => void;
+  off?: (event: string, fn: (data: any) => void) => void;
+  once?: (event: string, fn: (data: any) => void) => void;
+  getFiberRoots?: (id: number) => Set<FiberRoot>;
   onCommitFiberRoot: (id: number, root: FiberRoot, ...rest: any[]) => void;
   onCommitFiberUnmount: (...args: any[]) => void;
   onPostCommitFiberRoot?: (...args: any[]) => void;
   inject: (renderer: any) => number;
+  checkDCE?: (fn: any) => void;
   __domLensRoots?: Map<number, Set<FiberRoot>>;
+  __domLensShim?: boolean;
 }
 
 const HOOK_KEY = '__REACT_DEVTOOLS_GLOBAL_HOOK__';
@@ -46,45 +58,109 @@ const FIBER_TAG: Record<number, FiberKind> = {
   4: 'portal',
 };
 
-export function installDevtoolsHookShim(): void {
-  const w = window as any;
-  let hook: DevtoolsHook | undefined = w[HOOK_KEY];
-  if (!hook) {
-    let nextRendererId = 1;
-    hook = {
-      supportsFiber: true,
-      renderers: new Map(),
-      __domLensRoots: new Map(),
-      onCommitFiberRoot(id, root) {
-        if (!this.__domLensRoots!.has(id)) this.__domLensRoots!.set(id, new Set());
-        this.__domLensRoots!.get(id)!.add(root);
-      },
-      onCommitFiberUnmount() {},
-      onPostCommitFiberRoot() {},
-      inject(renderer) {
-        const id = nextRendererId++;
-        this.renderers.set(id, renderer);
-        return id;
-      },
-    };
-    Object.defineProperty(w, HOOK_KEY, {
-      value: hook,
-      configurable: true,
-      writable: false,
-    });
-  } else if (!hook.__domLensRoots) {
-    hook.__domLensRoots = new Map();
-    const origCommit = hook.onCommitFiberRoot.bind(hook);
-    hook.onCommitFiberRoot = function (id: number, root: FiberRoot, ...rest: any[]) {
+function createShim(): DevtoolsHook {
+  let nextRendererId = 0;
+  const listeners: Record<string, Set<(data: any) => void>> = {};
+  const fiberRoots = new Map<number, Set<FiberRoot>>();
+
+  const emit = (event: string, data: any) => {
+    const set = listeners[event];
+    if (!set) return;
+    for (const fn of set) {
       try {
-        if (!hook!.__domLensRoots!.has(id)) hook!.__domLensRoots!.set(id, new Set());
-        hook!.__domLensRoots!.get(id)!.add(root);
+        fn(data);
+      } catch {
+        /* swallow listener errors */
+      }
+    }
+  };
+
+  const sub = (event: string, fn: (data: any) => void) => {
+    if (!listeners[event]) listeners[event] = new Set();
+    listeners[event]!.add(fn);
+    return () => {
+      listeners[event]?.delete(fn);
+    };
+  };
+
+  const shim: DevtoolsHook = {
+    supportsFiber: true,
+    supportsFlight: true,
+    renderers: new Map(),
+    rendererInterfaces: new Map(),
+    helpers: new Map(),
+    listeners,
+    emit,
+    sub,
+    on: (event, fn) => {
+      sub(event, fn);
+    },
+    off: (event, fn) => {
+      listeners[event]?.delete(fn);
+    },
+    once: (event, fn) => {
+      const unsub = sub(event, (data) => {
+        unsub();
+        fn(data);
+      });
+    },
+    getFiberRoots(id: number) {
+      if (!fiberRoots.has(id)) fiberRoots.set(id, new Set());
+      return fiberRoots.get(id)!;
+    },
+    inject(renderer) {
+      const id = ++nextRendererId;
+      shim.renderers.set(id, renderer);
+      try {
+        emit('renderer', { id, renderer });
       } catch {
         /* ignore */
       }
-      return origCommit(id, root, ...rest);
-    };
+      return id;
+    },
+    onCommitFiberRoot(id, root) {
+      if (!fiberRoots.has(id)) fiberRoots.set(id, new Set());
+      fiberRoots.get(id)!.add(root);
+    },
+    onCommitFiberUnmount() {},
+    onPostCommitFiberRoot() {},
+    checkDCE() {},
+    __domLensRoots: fiberRoots,
+    __domLensShim: true,
+  };
+  return shim;
+}
+
+export function installDevtoolsHookShim(): void {
+  const w = window as any;
+  const existing: DevtoolsHook | undefined = w[HOOK_KEY];
+  if (!existing) {
+    const shim = createShim();
+    try {
+      Object.defineProperty(w, HOOK_KEY, {
+        value: shim,
+        configurable: true,
+        writable: true, // allow React DevTools to replace if it loads later (rare)
+      });
+    } catch {
+      w[HOOK_KEY] = shim;
+    }
+    return;
   }
+  if (existing.__domLensRoots) return; // already patched
+  // Non-destructively augment an existing hook (React DevTools is installed).
+  const roots = new Map<number, Set<FiberRoot>>();
+  existing.__domLensRoots = roots;
+  const origCommit = existing.onCommitFiberRoot?.bind(existing);
+  existing.onCommitFiberRoot = function (id: number, root: FiberRoot, ...rest: any[]) {
+    try {
+      if (!roots.has(id)) roots.set(id, new Set());
+      roots.get(id)!.add(root);
+    } catch {
+      /* ignore */
+    }
+    if (origCommit) return origCommit(id, root, ...rest);
+  };
 }
 
 function getFiberRoots(): FiberRoot[] {
