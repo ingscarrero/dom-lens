@@ -34,6 +34,17 @@ interface DomLensApi {
   /** Read the actual scroll position right now — used to verify a
    * scrollTo() landed where we asked. */
   getScrollPosition(): { scrollX: number; scrollY: number };
+  /** Kick off the async lazy-load priming pass. Returns immediately —
+   * use getPrimeLazyLoadStatus() to poll for completion. The async path
+   * is split because chrome.devtools.inspectedWindow.eval does not await
+   * Promises, so the panel needs a poll-friendly synchronous API. */
+  startPrimeLazyLoad(opts?: { delayMs?: number }): { ok: true };
+  /** Returns the current state of the priming pass started by
+   * startPrimeLazyLoad. Polled from the panel side. */
+  getPrimeLazyLoadStatus():
+    | { status: 'idle' | 'running' }
+    | { status: 'done'; finalHeight: number; finalWidth: number; startY: number }
+    | { status: 'error'; message: string };
 }
 
 export default defineContentScript({
@@ -143,6 +154,127 @@ export default defineContentScript({
     }
     let hiddenSticky: HiddenRecord[] = [];
 
+    type PrimeState =
+      | { status: 'idle' | 'running' }
+      | { status: 'done'; finalHeight: number; finalWidth: number; startY: number }
+      | { status: 'error'; message: string };
+    let primeState: PrimeState = { status: 'idle' };
+
+    // Capture-mode CSS overrides: force scroll-behavior to auto so our
+    // scrollTo()s land instantly even on pages that use `scroll-behavior:
+    // smooth` (which makes window.scrollTo({behavior:'instant'}) honour
+    // the css unless the spec strict path is taken — inconsistent across
+    // browsers). Removed when capture ends.
+    const SCROLL_FIX_STYLE_ID = '__dom_lens_scroll_fix__';
+    let savedHash: string | null = null;
+    let savedScrollRestoration: ScrollRestoration | null = null;
+
+    function installScrollFix(): void {
+      if (document.getElementById(SCROLL_FIX_STYLE_ID)) return;
+      const style = document.createElement('style');
+      style.id = SCROLL_FIX_STYLE_ID;
+      style.textContent = [
+        'html, body, *, *::before, *::after {',
+        '  scroll-behavior: auto !important;',
+        '  scroll-snap-type: none !important;',
+        '}',
+      ].join('\n');
+      (document.head || document.documentElement).appendChild(style);
+      // Clear URL hash anchors so the browser doesn't jump back to an
+      // anchor each time we scrollTo(0, 0). #mainContent and similar are
+      // a common scroll-to-top defeater.
+      try {
+        if (window.location.hash) {
+          savedHash = window.location.hash;
+          history.replaceState(
+            null,
+            '',
+            window.location.pathname + window.location.search,
+          );
+        }
+      } catch {
+        /* SecurityError on some sandboxed pages — fall through */
+      }
+      // Stop the browser from restoring an old scroll position mid-capture.
+      try {
+        if ('scrollRestoration' in history) {
+          savedScrollRestoration = history.scrollRestoration;
+          history.scrollRestoration = 'manual';
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
+    function uninstallScrollFix(): void {
+      const style = document.getElementById(SCROLL_FIX_STYLE_ID);
+      if (style) style.remove();
+      try {
+        if (savedHash) {
+          history.replaceState(
+            null,
+            '',
+            window.location.pathname + window.location.search + savedHash,
+          );
+          savedHash = null;
+        }
+        if (savedScrollRestoration && 'scrollRestoration' in history) {
+          history.scrollRestoration = savedScrollRestoration;
+          savedScrollRestoration = null;
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
+    /**
+     * Reliable scrollTo that tries multiple targets in order. Pages
+     * sometimes:
+     *   - override window.scrollTo (some SPAs/jQuery plugins);
+     *   - set body { overflow: hidden } and scroll documentElement;
+     *   - put the scrolling content under a custom element such that
+     *     scrollingElement is the real scroller.
+     */
+    function reliableScrollTo(x: number, y: number): void {
+      try {
+        window.scrollTo({ left: x, top: y, behavior: 'instant' as ScrollBehavior });
+      } catch {
+        try {
+          window.scrollTo(x, y);
+        } catch {
+          /* fall through */
+        }
+      }
+      try {
+        const de = document.documentElement;
+        if (de) {
+          de.scrollLeft = x;
+          de.scrollTop = y;
+        }
+      } catch {
+        /* ignore */
+      }
+      try {
+        const se = document.scrollingElement as HTMLElement | null;
+        if (se && se !== document.documentElement) {
+          se.scrollLeft = x;
+          se.scrollTop = y;
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
+    function currentDocHeight(): number {
+      return Math.max(
+        document.documentElement.scrollHeight,
+        document.body?.scrollHeight ?? 0,
+        document.documentElement.offsetHeight,
+        document.body?.offsetHeight ?? 0,
+        window.innerHeight,
+      );
+    }
+
     function snapshotAndHideFixedAndSticky(): number {
       // Collect every element whose computed position is fixed or sticky.
       // This is the classic duplication source for scroll-and-stitch
@@ -199,7 +331,7 @@ export default defineContentScript({
     }
 
     const api: DomLensApi = {
-      version: '0.3.3',
+      version: '0.3.4',
       capture(opts) {
         return runCapture(consoleBuffer, {
           maxMarkdownChars: opts?.maxMarkdownChars ?? 20000,
@@ -212,11 +344,7 @@ export default defineContentScript({
         return readPageMetrics();
       },
       scrollTo(x, y) {
-        try {
-          window.scrollTo({ left: x, top: y, behavior: 'instant' as ScrollBehavior });
-        } catch {
-          window.scrollTo(x, y);
-        }
+        reliableScrollTo(x, y);
         return { ok: true, scrollX: window.scrollX, scrollY: window.scrollY };
       },
       highlight(rect) {
@@ -242,13 +370,116 @@ export default defineContentScript({
         return { ok: true };
       },
       beginFullPageCapture() {
+        installScrollFix();
         return { ok: true, hiddenCount: snapshotAndHideFixedAndSticky() };
       },
       endFullPageCapture() {
-        return { ok: true, restoredCount: restoreHiddenFixedAndSticky() };
+        const n = restoreHiddenFixedAndSticky();
+        uninstallScrollFix();
+        return { ok: true, restoredCount: n };
       },
       getScrollPosition() {
         return { scrollX: window.scrollX, scrollY: window.scrollY };
+      },
+      startPrimeLazyLoad(opts) {
+        // Kick off the async priming pass and store the resulting state
+        // on a module-scoped variable. The panel polls
+        // getPrimeLazyLoadStatus() because chrome.devtools.inspectedWindow.eval
+        // doesn't await Promises.
+        if (primeState.status === 'running') return { ok: true };
+        primeState = { status: 'running' };
+        const startY = window.scrollY;
+        const delayMs = Math.max(40, opts?.delayMs ?? 180);
+
+        (async () => {
+          try {
+            // Force loading="lazy" images & iframes to eager so they start
+            // fetching even before our scroll passes them. Lazy is a perf
+            // hint, not semantic state — no need to restore.
+            try {
+              const imgs = document.querySelectorAll(
+                'img[loading="lazy"], iframe[loading="lazy"]',
+              );
+              for (let i = 0; i < imgs.length; i++) {
+                (imgs[i] as HTMLImageElement | HTMLIFrameElement).setAttribute(
+                  'loading',
+                  'eager',
+                );
+              }
+            } catch {
+              /* ignore */
+            }
+
+            installScrollFix();
+
+            const stepPx = Math.max(80, Math.floor(window.innerHeight * 0.8));
+            let y = 0;
+            let lastHeight = currentDocHeight();
+            let safety = 0;
+            while (y < lastHeight && safety < 200) {
+              reliableScrollTo(0, y);
+              await new Promise((r) => setTimeout(r, delayMs));
+              const h = currentDocHeight();
+              if (h > lastHeight) lastHeight = h;
+              y += stepPx;
+              safety += 1;
+            }
+            reliableScrollTo(0, lastHeight);
+            await new Promise((r) => setTimeout(r, delayMs));
+            lastHeight = Math.max(lastHeight, currentDocHeight());
+
+            // Wait for any in-flight images to decode before declaring
+            // the prime done. This catches images that started loading
+            // but haven't laid out yet (which would extend scrollHeight
+            // further once they do).
+            try {
+              const allImgs = Array.from(document.images);
+              const pending = allImgs.filter((img) => !img.complete);
+              if (pending.length > 0) {
+                await Promise.race([
+                  Promise.all(
+                    pending.map(
+                      (img) =>
+                        new Promise<void>((res) => {
+                          img.addEventListener('load', () => res(), { once: true });
+                          img.addEventListener('error', () => res(), { once: true });
+                        }),
+                    ),
+                  ),
+                  new Promise((res) => setTimeout(res, 2000)),
+                ]);
+                lastHeight = Math.max(lastHeight, currentDocHeight());
+              }
+            } catch {
+              /* ignore */
+            }
+
+            // Return to top so the real capture pass starts clean.
+            reliableScrollTo(0, 0);
+            await new Promise((r) => setTimeout(r, 80));
+
+            primeState = {
+              status: 'done',
+              finalHeight: lastHeight,
+              finalWidth: Math.max(
+                document.documentElement.scrollWidth,
+                document.body?.scrollWidth ?? 0,
+                window.innerWidth,
+              ),
+              startY,
+            };
+          } catch (e) {
+            primeState = {
+              status: 'error',
+              message: e instanceof Error ? e.message : String(e),
+            };
+          }
+        })();
+
+        return { ok: true };
+      },
+      getPrimeLazyLoadStatus() {
+        return primeState;
       },
     };
 

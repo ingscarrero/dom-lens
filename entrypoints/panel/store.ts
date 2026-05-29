@@ -26,7 +26,7 @@ export interface FocusedComponent {
 export interface CaptureProgress {
   step: number;
   total: number;
-  phase: 'metrics' | 'tiles' | 'stitching' | 'finalizing';
+  phase: 'metrics' | 'priming' | 'tiles' | 'stitching' | 'finalizing';
 }
 
 export interface ChatTurn {

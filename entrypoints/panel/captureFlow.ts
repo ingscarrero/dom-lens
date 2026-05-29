@@ -9,6 +9,7 @@ import {
   callDomLensCapture,
   callEndFullPageCapture,
   callGetScrollPosition,
+  callPrimeLazyLoad,
   callScrollMetrics,
   callScrollTo,
 } from './hooks/useInspectedEval';
@@ -84,6 +85,14 @@ export async function runCapture(ctx: CaptureContext, settings: Settings): Promi
         // Detect scroll-locked / nested-scrolled pages by verifying that
         // scrollTo() actually moved the viewport.
         getScrollPosition: callGetScrollPosition,
+        // Wake up lazy-loaded images, observers, and "load more" handlers
+        // before we plan tile positions — otherwise scrollHeight reported
+        // at T0 underestimates the real document size.
+        primeLazyLoad: () => callPrimeLazyLoad(180, 45_000),
+        onPrimingProgress: (phase) => {
+          if (phase === 'start')
+            store.setCaptureProgress({ step: 0, total: 1, phase: 'priming' });
+        },
       });
       if (res.ok) {
         screenshot = res.screenshot;

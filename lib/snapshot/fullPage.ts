@@ -30,6 +30,14 @@ export interface CaptureFullPageDeps {
    * landed. Used to detect scroll-locked or nested-scrolled pages where
    * window.scrollTo silently does nothing. */
   getScrollPosition?: () => Promise<{ x: number; y: number } | null>;
+  /** Pre-scroll the page to trigger lazy-loaded content. Returns the
+   * post-prime document dimensions so we can plan tiles against the
+   * final size rather than the pre-prime size. Optional — when omitted
+   * we skip priming. */
+  primeLazyLoad?: () => Promise<{ ok: boolean; finalHeight: number; finalWidth: number } | null>;
+  /** Callback invoked when the priming pass starts/ends so the panel can
+   * surface progress. */
+  onPrimingProgress?: (phase: 'start' | 'done') => void;
 }
 
 /** A raw viewport tile captured at a specific scroll offset. Keeping these
@@ -62,10 +70,31 @@ function loadImage(dataUrl: string): Promise<HTMLImageElement> {
 export async function captureFullPage(deps: CaptureFullPageDeps): Promise<CaptureFullPageResult> {
   const metricsRes = await deps.scrollMetrics();
   if (!metricsRes.ok) return { ok: false, reason: metricsRes.reason };
-  const m = metricsRes.metrics;
+  let m = metricsRes.metrics;
 
   const origX = m.scrollX;
   const origY = m.scrollY;
+
+  // Priming pass: scroll top-to-bottom to wake up lazy-loaded content and
+  // observe the final document height. Without this, pages with
+  // `loading="lazy"` images and "load more on scroll" handlers report a
+  // pre-prime scrollHeight that's much shorter than the real page — we
+  // plan too few tiles and miss content below the fold.
+  if (deps.primeLazyLoad) {
+    deps.onPrimingProgress?.('start');
+    const primed = await deps.primeLazyLoad();
+    deps.onPrimingProgress?.('done');
+    if (primed?.ok) {
+      // Merge the post-prime dimensions into the metrics. We keep the
+      // original viewport / DPR but update document size.
+      m = {
+        ...m,
+        scrollHeight: Math.max(m.scrollHeight, primed.finalHeight),
+        scrollWidth: Math.max(m.scrollWidth, primed.finalWidth),
+      };
+    }
+  }
+
   const stepX = Math.max(1, Math.floor(m.viewportWidth));
   const stepY = Math.max(1, Math.floor(m.viewportHeight));
   const cols = Math.max(1, Math.ceil(m.scrollWidth / stepX));

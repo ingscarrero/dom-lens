@@ -27,12 +27,20 @@ export interface PromptPreset {
  */
 export const MERMAID_RULES = `**Mermaid output rules — follow strictly, every diagram fails the parser otherwise:**
 - Use exactly one of these diagram types per block: \`flowchart TD\`, \`flowchart LR\`, \`sequenceDiagram\`, \`classDiagram\`, \`erDiagram\`, \`stateDiagram-v2\`, \`pie\`, \`mindmap\`, \`gantt\`. Do NOT mix syntaxes.
+- **One statement per line.** Never put two node definitions on the same line. Either connect them with an explicit edge or split onto separate lines. Examples:
+  - WRONG: \`A[Home] B[About] C[Contact]\` — parser sees this as one node followed by garbage.
+  - WRONG: \`B -- Filter Links | C[Learn] D[Reference]\` — multiple unconnected nodes after an edge.
+  - RIGHT: \`A[Home] --> B[About]\` then on the next line \`B --> C[Contact]\`.
+  - RIGHT: each \`subgraph\`, \`end\`, node, and edge on its own line.
 - ASCII only. No emoji, no smart quotes (use \`"\` not \`"\` or \`"\`), no em-dashes (use \`-\` or \`->\`), no \`\\u\` escapes, no accented letters.
 - Node IDs must match \`[A-Za-z_][A-Za-z0-9_]*\`. Lowercase preferred. No spaces, no dots, no slashes, no parentheses in IDs.
-- Labels with spaces or punctuation MUST be wrapped: \`A[User form]\`, \`B("Submit handler")\`, \`C{"Decision?"}\`. Inside the brackets quote with regular double quotes.
+- Labels with spaces or punctuation MUST be wrapped: \`A[User form]\`, \`B("Submit handler")\`, \`C{"Decision?"}\`. Inside the brackets quote with regular double quotes. Do NOT put a pipe \`|\` inside a label unless it is an edge-label between \`-- |label|\` markers.
+- Edge labels in flowcharts use one of these exact forms — never improvise:
+  - \`A -- label --> B\` (label between two pairs of dashes, before \`-->\`)
+  - \`A -->|label| B\` (label inside pipes, immediately after \`-->\`)
+  - Do NOT write \`A -- label| B\` or \`A | label --> B\`.
 - No styling directives. Do NOT emit \`%%{init}%%\`, \`classDef\`, \`style\`, \`linkStyle\`, \`click\`, or theme blocks — the panel already themes Mermaid.
 - For \`pie\`: each row is \`"Label" : number\` (quoted label, space, colon, space, number). No trailing comma.
-- For \`flowchart\`: edges use \`-->\` or \`---\` or \`-.->\`. Labelled edge: \`A -- label --> B\` (no quotes around the label).
 - For \`sequenceDiagram\`: participants declared first (\`participant User\`), then \`User->>Server: message\` lines.
 - Wrap the diagram in a \`\`\`mermaid fenced code block. Nothing else inside the fence — no extra prose, no extra newlines at the top.
 - If a diagram would need >50 nodes, summarise to the 10-15 most important ones instead — overly large diagrams parse slowly and read poorly.`;

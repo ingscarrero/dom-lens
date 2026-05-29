@@ -173,14 +173,16 @@ export default function App() {
       <header className="flex items-center justify-between border-b border-panel-border bg-panel-surface px-3 py-2">
         <div className="flex items-center gap-2">
           <span className="text-sm font-semibold">DOM Lens</span>
-          <span className="text-xs text-panel-muted">v0.3.3</span>
+          <span className="text-xs text-panel-muted">v0.3.4</span>
         </div>
         <div className="flex items-center gap-2">
           {capturing && captureProgress && (
             <span className="text-xs text-panel-muted">
               {captureProgress.phase === 'tiles'
                 ? `Tile ${captureProgress.step}/${captureProgress.total}…`
-                : captureProgress.phase}
+                : captureProgress.phase === 'priming'
+                  ? 'Priming lazy-loaded content…'
+                  : captureProgress.phase}
             </span>
           )}
           <button

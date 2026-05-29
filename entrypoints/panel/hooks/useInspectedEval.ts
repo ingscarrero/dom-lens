@@ -133,6 +133,64 @@ export async function callEndFullPageCapture(): Promise<void> {
   );
 }
 
+/**
+ * Drives the main-world priming pass: kick off, then poll for completion.
+ * Split because chrome.devtools.inspectedWindow.eval doesn't await Promises,
+ * so the main world keeps state in `primeState` that we poll over the wire.
+ */
+export async function callPrimeLazyLoad(
+  delayMs = 180,
+  timeoutMs = 30_000,
+): Promise<{ ok: boolean; finalHeight: number; finalWidth: number } | null> {
+  // Kick off
+  const startExpr = `(function(){
+    try {
+      if (!window.__dom_lens__ || typeof window.__dom_lens__.startPrimeLazyLoad !== 'function') {
+        return JSON.stringify({ ok: false, reason: 'api-missing' });
+      }
+      return JSON.stringify(window.__dom_lens__.startPrimeLazyLoad({ delayMs: ${Number(delayMs) || 180} }));
+    } catch (e) {
+      return JSON.stringify({ ok: false, reason: (e && e.message) || String(e) });
+    }
+  })()`;
+  const startRes = await inspectedEval<string>(startExpr);
+  if (startRes.isError || typeof startRes.value !== 'string') return null;
+  try {
+    const v = JSON.parse(startRes.value);
+    if (!v?.ok) return null;
+  } catch {
+    return null;
+  }
+
+  // Poll
+  const pollExpr = `(function(){
+    try {
+      return JSON.stringify(window.__dom_lens__ ? window.__dom_lens__.getPrimeLazyLoadStatus() : null);
+    } catch (e) { return 'null'; }
+  })()`;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 300));
+    const r = await inspectedEval<string>(pollExpr);
+    if (r.isError || typeof r.value !== 'string') continue;
+    try {
+      const s = JSON.parse(r.value);
+      if (!s) continue;
+      if (s.status === 'done') {
+        return {
+          ok: true,
+          finalHeight: Number(s.finalHeight) || 0,
+          finalWidth: Number(s.finalWidth) || 0,
+        };
+      }
+      if (s.status === 'error') return null;
+    } catch {
+      /* keep polling */
+    }
+  }
+  return null; // timed out
+}
+
 export async function callGetScrollPosition(): Promise<{ x: number; y: number } | null> {
   const res = await inspectedEval<string>(
     `(function(){ try { return JSON.stringify(window.__dom_lens__ ? window.__dom_lens__.getScrollPosition() : null); } catch(e) { return 'null'; } })()`,
