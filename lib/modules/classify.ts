@@ -1,20 +1,37 @@
 import type { HarEntry } from '@/lib/snapshot/types';
+import type { PageResourceEntry } from './pageInventory';
 import type { ChunkKind, LoadedModule, ModuleClassification } from './types';
 
 /**
- * Pure URL/MIME-based classifier. Runs panel-side over devtools network entries
- * to bucket script & asset URLs into LoadedModule rows. Light heuristics — the
- * sourcemap pipeline is where we actually attribute bytes to source files.
+ * Pure URL/MIME-based classifier. Runs panel-side over a merged feed of:
+ *   1. Devtools network entries (HarEntry) — populated while the panel is open.
+ *   2. PerformanceResourceTiming entries (PageResourceEntry) — captured in
+ *      the page itself so we don't miss the initial bundle and any chunks
+ *      that loaded before DevTools attached.
+ *
+ * When the same URL appears in both feeds the devtools entry wins (richer
+ * metadata: status, MIME from Content-Type, response size from the response
+ * payload). PerformanceResourceTiming fills the gaps with whatever the
+ * browser remembered.
  */
-export function classifyEntries(entries: HarEntry[]): LoadedModule[] {
+export function classifyEntries(
+  entries: HarEntry[],
+  pageResources: PageResourceEntry[] = [],
+): LoadedModule[] {
   const out: LoadedModule[] = [];
   const seen = new Set<string>();
   for (const e of entries) {
-    if (!e.url) continue;
-    if (seen.has(e.url)) continue;
+    if (!e.url || seen.has(e.url)) continue;
     seen.add(e.url);
-    if (!shouldInclude(e)) continue;
+    if (!shouldInclude({ url: e.url, mimeType: e.mimeType, resourceType: e.resourceType })) continue;
     const mod = classifyEntry(e);
+    if (mod) out.push(mod);
+  }
+  for (const r of pageResources) {
+    if (!r.url || seen.has(r.url)) continue;
+    seen.add(r.url);
+    if (!shouldInclude({ url: r.url, mimeType: r.mimeHint, resourceType: r.initiatorType })) continue;
+    const mod = classifyResource(r);
     if (mod) out.push(mod);
   }
   // Largest first — bundle-size readers care about the heavy hitters.
@@ -22,7 +39,7 @@ export function classifyEntries(entries: HarEntry[]): LoadedModule[] {
   return out;
 }
 
-function shouldInclude(e: HarEntry): boolean {
+function shouldInclude(e: { url: string; mimeType?: string; resourceType?: string }): boolean {
   const rt = (e.resourceType ?? '').toLowerCase();
   const mime = (e.mimeType ?? '').toLowerCase();
   if (rt === 'script' || rt === 'stylesheet' || rt === 'document') return true;
@@ -32,6 +49,34 @@ function shouldInclude(e: HarEntry): boolean {
   if (mime.startsWith('image/')) return true;
   // Heuristic by extension
   return /\.(js|mjs|cjs|css|wasm|woff2?|ttf|otf|map|json)(\?|$)/i.test(e.url);
+}
+
+function classifyResource(r: PageResourceEntry): LoadedModule | null {
+  let parsed: URL | null = null;
+  try {
+    parsed = new URL(r.url);
+  } catch {
+    return null;
+  }
+  const classification = classifyUrl(r.url, r.mimeHint, r.initiatorType);
+  return {
+    id: r.url,
+    url: r.url,
+    origin: parsed.origin,
+    pathname: parsed.pathname,
+    resourceType: r.initiatorType,
+    mimeType: r.mimeHint,
+    // transferSize is 0 for cached responses — fall back to encoded body size
+    // so the row isn't reported as 0 bytes.
+    transferredBytes:
+      typeof r.transferSize === 'number' && r.transferSize > 0
+        ? r.transferSize
+        : r.encodedBodySize,
+    responseBytes: r.decodedBodySize ?? r.encodedBodySize,
+    timeMs: typeof r.duration === 'number' ? Math.round(r.duration) : undefined,
+    classification,
+    sourceMapStatus: 'unknown',
+  };
 }
 
 function classifyEntry(e: HarEntry): LoadedModule | null {

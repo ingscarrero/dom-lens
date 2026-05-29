@@ -1,6 +1,7 @@
 import type { ComponentNode } from '../react/fiberToTree';
 import type { FederationGraph } from '../federation/graph';
 import type { LoadedModule, TechStack } from '../modules/types';
+import type { PageResourceEntry } from '../modules/pageInventory';
 
 export interface ConsoleEntry {
   level: 'log' | 'info' | 'warn' | 'error' | 'debug';
@@ -53,6 +54,10 @@ export interface PartialSnapshot {
   /** Detected tech stack from window globals + in-page scripts. URL evidence
    * is folded in panel-side from devtools network entries. */
   techStack?: TechStack;
+  /** Every resource the page has loaded according to PerformanceResourceTiming
+   * + declared <script>/<link>. Independent of the DevTools network panel,
+   * so it's populated even for assets that loaded before DevTools was opened. */
+  pageResources?: PageResourceEntry[];
 }
 
 export type ScreenshotKind = 'viewport' | 'fullpage';

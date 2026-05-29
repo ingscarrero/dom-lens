@@ -96,7 +96,7 @@ export async function runCapture(ctx: CaptureContext, settings: Settings): Promi
     store.setCaptureProgress({ step: 1, total: 1, phase: 'finalizing' });
 
     const network = useStore.getState().network;
-    const modules = classifyEntries(network);
+    const modules = classifyEntries(network, partial.pageResources ?? []);
     const techStack = partial.techStack
       ? mergeUrlEvidence(partial.techStack, modules.map((m) => m.url))
       : mergeUrlEvidence({ matches: [], byCategory: {} }, modules.map((m) => m.url));

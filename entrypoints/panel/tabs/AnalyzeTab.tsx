@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useStore } from '../store';
 import type { LmChatPayload, ChatMessage } from '@/lib/bridge/protocol';
 import { buildSnapshotPrompt, type SnapshotImage } from '@/lib/lm-studio/client';
@@ -117,7 +117,18 @@ export default function AnalyzeTab({ onSend, onCancel }: Props) {
   const startChat = useStore((s) => s.startChat);
   const resetChat = useStore((s) => s.resetChat);
   const chatRequestId = useStore((s) => s.chatRequestId);
+  const pendingPrompt = useStore((s) => s.pendingPrompt);
+  const setPendingPrompt = useStore((s) => s.setPendingPrompt);
   const [input, setInput] = useState('Summarize this page: what does it do, what are the main components, and what is its architecture?');
+
+  // Consume any preset queued from the Insights tab so the user lands here
+  // with the prompt already in the composer.
+  useEffect(() => {
+    if (pendingPrompt) {
+      setInput(pendingPrompt);
+      setPendingPrompt(null);
+    }
+  }, [pendingPrompt, setPendingPrompt]);
 
   const send = () => {
     if (!snap || !input.trim() || chatRequestId) return;

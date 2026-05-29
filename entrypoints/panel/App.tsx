@@ -7,7 +7,7 @@ import SnapshotTab from './tabs/SnapshotTab';
 import ComponentsTab from './tabs/ComponentsTab';
 import FederationTab from './tabs/FederationTab';
 import ModulesTab from './tabs/ModulesTab';
-import DiagramsTab from './tabs/DiagramsTab';
+import InsightsTab from './tabs/InsightsTab';
 import AnalyzeTab from './tabs/AnalyzeTab';
 import SettingsTab from './tabs/SettingsTab';
 import type { BgToPanel } from '@/lib/bridge/protocol';
@@ -20,7 +20,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'components', label: 'Components' },
   { id: 'federation', label: 'Federation' },
   { id: 'modules', label: 'Modules' },
-  { id: 'diagrams', label: 'Diagrams' },
+  { id: 'insights', label: 'Insights' },
   { id: 'analyze', label: 'Analyze' },
   { id: 'settings', label: 'Settings' },
 ];
@@ -161,7 +161,7 @@ export default function App() {
       <header className="flex items-center justify-between border-b border-panel-border bg-panel-surface px-3 py-2">
         <div className="flex items-center gap-2">
           <span className="text-sm font-semibold">DOM Lens</span>
-          <span className="text-xs text-panel-muted">v0.3.0</span>
+          <span className="text-xs text-panel-muted">v0.3.1</span>
         </div>
         <div className="flex items-center gap-2">
           {capturing && captureProgress && (
@@ -211,7 +211,15 @@ export default function App() {
         {tab === 'components' && <ComponentsTab />}
         {tab === 'federation' && <FederationTab />}
         {tab === 'modules' && <ModulesTab fetchText={fetchText} />}
-        {tab === 'diagrams' && <DiagramsTab />}
+        {tab === 'insights' && (
+          <InsightsTab
+            setTab={setTab}
+            onApplyPreset={(preset) => {
+              useStore.getState().setPendingPrompt(preset.prompt);
+              setTab('analyze');
+            }}
+          />
+        )}
         {tab === 'analyze' && (
           <AnalyzeTab
             onSend={(payload, requestId) => {

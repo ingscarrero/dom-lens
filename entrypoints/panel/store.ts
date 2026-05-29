@@ -9,7 +9,7 @@ export type Tab =
   | 'components'
   | 'federation'
   | 'modules'
-  | 'diagrams'
+  | 'insights'
   | 'analyze'
   | 'settings';
 
@@ -52,6 +52,9 @@ interface State {
   componentFilter: string;
   significantOnly: boolean;
   subtreeRootId: string | null;
+  /** One-shot prompt to seed the Analyze input. Used by Insights' preset CTAs
+   * — the consumer reads it once on mount and clears it via `setPendingPrompt(null)`. */
+  pendingPrompt: string | null;
 }
 
 interface Actions {
@@ -74,6 +77,7 @@ interface Actions {
   setComponentFilter(s: string): void;
   setSignificantOnly(v: boolean): void;
   setSubtreeRootId(id: string | null): void;
+  setPendingPrompt(p: string | null): void;
 }
 
 export const useStore = create<State & Actions>((set) => ({
@@ -92,6 +96,7 @@ export const useStore = create<State & Actions>((set) => ({
   componentFilter: '',
   significantOnly: true,
   subtreeRootId: null,
+  pendingPrompt: null,
   setTab: (t) => set({ tab: t }),
   setCapturing: (v) =>
     set({ capturing: v, captureError: v ? null : undefined, captureProgress: v ? null : null }),
@@ -148,4 +153,5 @@ export const useStore = create<State & Actions>((set) => ({
   setComponentFilter: (s) => set({ componentFilter: s }),
   setSignificantOnly: (v) => set({ significantOnly: v }),
   setSubtreeRootId: (id) => set({ subtreeRootId: id }),
+  setPendingPrompt: (p) => set({ pendingPrompt: p }),
 }));

@@ -2,6 +2,7 @@ import { serializeDom } from './serializeDom';
 import { walkAllFiberRoots } from '../react/walkFiber';
 import { detectFederation } from '../federation/detect';
 import { detectTechStackFromWindow } from '../modules/detect';
+import { inventoryPageResources } from '../modules/pageInventory';
 import type { ConsoleEntry, PageMetrics, PartialSnapshot } from './types';
 
 export function readPageMetrics(): PageMetrics {
@@ -69,6 +70,12 @@ export function runCapture(
   } catch {
     techStack = undefined;
   }
+  let pageResources: PartialSnapshot['pageResources'];
+  try {
+    pageResources = inventoryPageResources();
+  } catch {
+    pageResources = undefined;
+  }
 
   return {
     url: location.href,
@@ -89,5 +96,6 @@ export function runCapture(
     },
     pageMetrics: readPageMetrics(),
     techStack,
+    pageResources,
   };
 }
