@@ -47,23 +47,45 @@ function MarkdownRendererImpl({ source, className, compact }: Props) {
               {children}
             </blockquote>
           ),
-          code: ({ inline, children, className }: any) => {
-            if (inline) {
+          // react-markdown v10 removed the `inline` flag on the `code` component.
+          // Block code has a `language-xxx` className (set by the markdown parser
+          // for fenced blocks). Inline backtick code has no className. The block
+          // <pre> wrapping is handled by the separate `pre` override below.
+          code: ({ className, children, ...rest }: any) => {
+            const isBlock = /language-/.test(className || '');
+            if (isBlock) {
               return (
-                <code className="rounded bg-black/40 px-1 py-0.5 font-mono text-[11px] text-amber-200">
+                <code className={className} {...rest}>
                   {children}
                 </code>
               );
             }
-            const langMatch = /language-(\w+)/.exec(className || '');
+            return (
+              <code className="rounded bg-black/40 px-1 py-0.5 font-mono text-[11px] text-amber-200">
+                {children}
+              </code>
+            );
+          },
+          pre: ({ children, ...rest }: any) => {
+            // Try to surface the language label (from the inner <code className="language-xxx">)
+            let lang: string | undefined;
+            const node: any = (rest as any).node;
+            try {
+              const codeNode = node?.children?.find((c: any) => c.tagName === 'code');
+              const cls: string = codeNode?.properties?.className?.[0] ?? '';
+              const m = /language-(\w+)/.exec(cls);
+              if (m) lang = m[1];
+            } catch {
+              /* ignore */
+            }
             return (
               <pre className="scrollbar-thin my-1 max-w-full overflow-auto rounded border border-panel-border bg-black/50 p-2 font-mono text-[11px] leading-snug">
-                {langMatch && (
+                {lang && (
                   <div className="mb-1 text-[10px] uppercase tracking-wide text-panel-muted">
-                    {langMatch[1]}
+                    {lang}
                   </div>
                 )}
-                <code className={className}>{children}</code>
+                {children}
               </pre>
             );
           },
