@@ -1,0 +1,12 @@
+{
+  "name": "mf-demo",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n remote,host -c orange,sky --kill-others-on-fail \"pnpm --filter mf-remote start\" \"pnpm --filter mf-host start\"",
+    "build": "pnpm --filter mf-remote build && pnpm --filter mf-host build"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}
