@@ -2,6 +2,7 @@ import { memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { MermaidBlock } from './MermaidBlock';
+import { ArtifactBlock } from './ArtifactBlock';
 
 interface Props {
   source: string;
@@ -89,6 +90,12 @@ function MarkdownRendererImpl({ source, className, compact, streaming }: Props) 
             // Auto-render mermaid fenced blocks as actual diagrams.
             if (lang === 'mermaid' && raw) {
               return <MermaidBlock source={raw} streaming={streaming} />;
+            }
+            // Auto-render ```html fenced blocks as sandboxed artifacts
+            // (only when there's enough content to plausibly be a real
+            // visualisation, not a small example snippet).
+            if (lang === 'html' && raw && raw.length >= 80) {
+              return <ArtifactBlock source={raw} streaming={streaming} />;
             }
             return (
               <pre className="scrollbar-thin my-1 max-w-full overflow-auto rounded border border-panel-border bg-black/50 p-2 font-mono text-[11px] leading-snug">

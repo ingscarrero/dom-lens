@@ -1,7 +1,9 @@
 import { useMemo, useState } from 'react';
 import { useStore, type Tab } from '../store';
 import { extractMermaidBlocks } from '@/lib/diagrams/extractMermaid';
+import { extractArtifacts } from '@/lib/artifacts/extractArtifacts';
 import { MermaidBlock } from '@/lib/ui/MermaidBlock';
+import { ArtifactBlock } from '@/lib/ui/ArtifactBlock';
 import { MarkdownEditor } from '@/lib/ui/MarkdownEditor';
 import { summarizeModules } from '@/lib/modules/classify';
 import { formatBytes } from '@/lib/modules/sourcemap';
@@ -58,6 +60,24 @@ export default function InsightsTab({ onApplyPreset, setTab }: Props) {
   }, [chat]);
 
   const totalDiagrams = diagrams.reduce((n, t) => n + t.blocks.length, 0);
+
+  const artifacts = useMemo(() => {
+    const out: Array<{
+      turnId: string;
+      replyNumber: number;
+      blocks: ReturnType<typeof extractArtifacts>;
+    }> = [];
+    let replyN = 0;
+    chat.forEach((turn) => {
+      if (turn.role !== 'assistant') return;
+      replyN += 1;
+      const blocks = extractArtifacts(turn.content);
+      if (blocks.length === 0) return;
+      out.push({ turnId: turn.id, replyNumber: replyN, blocks });
+    });
+    return out;
+  }, [chat]);
+  const totalArtifacts = artifacts.reduce((n, t) => n + t.blocks.length, 0);
 
   if (!snap) {
     return (
@@ -127,6 +147,50 @@ export default function InsightsTab({ onApplyPreset, setTab }: Props) {
               </div>
               {turn.blocks.map((b) => (
                 <MermaidBlock
+                  key={`${turn.turnId}-${b.index}`}
+                  source={b.source}
+                  title={b.title}
+                />
+              ))}
+            </div>
+          ))
+        )}
+      </section>
+
+      {/* === Generated artifacts === */}
+      <section className="border-t border-panel-border px-4 py-3">
+        <div className="mb-2 flex items-center justify-between">
+          <h3 className="text-[11px] font-semibold uppercase tracking-wide text-panel-muted">
+            Generated artifacts ({totalArtifacts})
+          </h3>
+          {totalArtifacts > 0 && (
+            <button
+              type="button"
+              onClick={() => setTab('analyze')}
+              className="text-[11px] text-panel-accent hover:text-sky-300"
+            >
+              Open chat →
+            </button>
+          )}
+        </div>
+
+        {totalArtifacts === 0 ? (
+          <div className="rounded border border-dashed border-panel-border bg-panel-bg/20 p-3 text-[11px] text-panel-muted">
+            No artifacts yet. Ask the LLM for a <code>```html</code> visualisation
+            (try the <strong>Visual dashboard</strong> preset) — sandboxed iframes
+            render right here.
+          </div>
+        ) : (
+          artifacts.map((turn) => (
+            <div key={turn.turnId} className="mb-4">
+              <div className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-wide text-panel-muted">
+                <span>Reply #{turn.replyNumber}</span>
+                <span>
+                  {turn.blocks.length} artifact{turn.blocks.length === 1 ? '' : 's'}
+                </span>
+              </div>
+              {turn.blocks.map((b) => (
+                <ArtifactBlock
                   key={`${turn.turnId}-${b.index}`}
                   source={b.source}
                   title={b.title}
