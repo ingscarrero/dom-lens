@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../store';
 import { sliceImage, suggestSliceCount } from '@/lib/snapshot/slicer';
+import { MarkdownRenderer } from '@/lib/ui/MarkdownRenderer';
+import { JsonViewer } from '@/lib/ui/JsonViewer';
 
 export default function SnapshotTab() {
   const snap = useStore((s) => s.snapshot);
@@ -10,6 +12,7 @@ export default function SnapshotTab() {
   const setTiles = useStore((s) => s.setTiles);
 
   const [showJson, setShowJson] = useState(false);
+  const [markdownMode, setMarkdownMode] = useState<'rendered' | 'source'>('rendered');
   const [orientationOverride, setOrientationOverride] = useState<'auto' | 'vertical' | 'horizontal'>('auto');
   const [sliceCount, setSliceCount] = useState<number>(settings.defaultSliceCount);
   const [slicing, setSlicing] = useState(false);
@@ -235,11 +238,44 @@ export default function SnapshotTab() {
       <div className="mb-3 rounded border border-panel-border bg-panel-surface p-2">
         <div className="mb-1 flex items-center justify-between">
           <div className="text-[10px] uppercase text-panel-muted">DOM markdown</div>
-          <span className="text-[10px] text-panel-muted">{snap.dom.charCount.toLocaleString()} chars</span>
+          <div className="flex items-center gap-2 text-[10px] text-panel-muted">
+            <span>{snap.dom.charCount.toLocaleString()} chars</span>
+            <span className="h-3 w-px bg-panel-border" />
+            <button
+              type="button"
+              className={
+                'rounded px-1.5 py-0.5 ' +
+                (markdownMode === 'rendered'
+                  ? 'bg-black/30 text-white'
+                  : 'hover:text-white')
+              }
+              onClick={() => setMarkdownMode('rendered')}
+            >
+              Rendered
+            </button>
+            <button
+              type="button"
+              className={
+                'rounded px-1.5 py-0.5 ' +
+                (markdownMode === 'source'
+                  ? 'bg-black/30 text-white'
+                  : 'hover:text-white')
+              }
+              onClick={() => setMarkdownMode('source')}
+            >
+              Source
+            </button>
+          </div>
         </div>
-        <pre className="scrollbar-thin max-h-72 overflow-auto whitespace-pre-wrap rounded bg-black/30 p-2 font-mono text-[11px] leading-snug">
+        <div className="scrollbar-thin max-h-72 overflow-auto rounded bg-black/30 p-2">
+          {markdownMode === 'rendered' ? (
+            <MarkdownRenderer source={snap.dom.markdown} />
+          ) : (
+            <pre className="whitespace-pre-wrap font-mono text-[11px] leading-snug">
 {snap.dom.markdown}
-        </pre>
+            </pre>
+          )}
+        </div>
       </div>
 
       {snap.console.length > 0 && (
@@ -275,13 +311,14 @@ export default function SnapshotTab() {
           {showJson ? '− Hide raw JSON' : '+ Show raw JSON'}
         </button>
         {showJson && (
-          <pre className="scrollbar-thin mt-2 max-h-80 overflow-auto whitespace-pre rounded bg-black/30 p-2 font-mono text-[10px]">
-{JSON.stringify(
-  snap,
-  (k, v) => (k === 'dataUrl' ? '[image dataURL omitted]' : v),
-  2,
-)}
-          </pre>
+          <div className="mt-2">
+            <JsonViewer
+              value={snap}
+              maxHeight={420}
+              collapsed={2}
+              elideKeys={['dataUrl', 'markdown', 'html']}
+            />
+          </div>
         )}
       </div>
     </div>

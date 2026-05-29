@@ -3,6 +3,8 @@ import { useStore } from '../store';
 import type { LmChatPayload, ChatMessage } from '@/lib/bridge/protocol';
 import { buildSnapshotPrompt, type SnapshotImage } from '@/lib/lm-studio/client';
 import type { Snapshot } from '@/lib/snapshot/types';
+import { MarkdownRenderer } from '@/lib/ui/MarkdownRenderer';
+import { MarkdownEditor } from '@/lib/ui/MarkdownEditor';
 
 interface Props {
   onSend(payload: LmChatPayload, requestId: string): void;
@@ -64,6 +66,46 @@ function topNames(
     .sort((a, b) => b[1] - a[1])
     .slice(0, 8)
     .map(([n, c]) => `${n}×${c}`);
+}
+
+function ChatTurnView({ turn }: { turn: import('../store').ChatTurn }) {
+  const [showSource, setShowSource] = useState(false);
+  return (
+    <div
+      className={
+        'rounded border p-2 ' +
+        (turn.role === 'user'
+          ? 'border-panel-border bg-panel-surface'
+          : 'border-panel-accent/30 bg-panel-accent/10')
+      }
+    >
+      <div className="mb-1 flex items-center justify-between">
+        <div className="text-[10px] uppercase text-panel-muted">
+          {turn.role} {turn.streaming && '· streaming'}
+        </div>
+        <button
+          type="button"
+          className="text-[10px] text-panel-muted hover:text-white"
+          onClick={() => setShowSource((v) => !v)}
+          title={showSource ? 'View rendered markdown' : 'View raw source'}
+        >
+          {showSource ? '👁 rendered' : '📝 source'}
+        </button>
+      </div>
+      {showSource ? (
+        <pre className="whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-panel-text">
+{turn.content}
+          {turn.streaming && <span className="ml-0.5 animate-pulse">▍</span>}
+        </pre>
+      ) : (
+        <div className="relative">
+          <MarkdownRenderer source={turn.content || (turn.streaming ? '_…_' : '')} />
+          {turn.streaming && <span className="ml-0.5 inline-block animate-pulse">▍</span>}
+        </div>
+      )}
+      {turn.error && <div className="mt-1 text-[11px] text-red-300">{turn.error}</div>}
+    </div>
+  );
 }
 
 export default function AnalyzeTab({ onSend, onCancel }: Props) {
@@ -162,41 +204,21 @@ export default function AnalyzeTab({ onSend, onCancel }: Props) {
           </div>
         )}
         {chat.map((t) => (
-          <div
-            key={t.id}
-            className={
-              'rounded border p-2 ' +
-              (t.role === 'user'
-                ? 'border-panel-border bg-panel-surface'
-                : 'border-panel-accent/30 bg-panel-accent/10')
-            }
-          >
-            <div className="mb-1 text-[10px] uppercase text-panel-muted">
-              {t.role} {t.streaming && '· streaming'}
-            </div>
-            <div className="whitespace-pre-wrap font-mono text-[12px] leading-relaxed">
-              {t.content}
-              {t.streaming && <span className="ml-0.5 animate-pulse">▍</span>}
-            </div>
-            {t.error && <div className="mt-1 text-red-300">{t.error}</div>}
-          </div>
+          <ChatTurnView key={t.id} turn={t} />
         ))}
       </div>
 
       <div className="flex gap-2 border-t border-panel-border bg-panel-surface p-2">
-        <textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder={snap ? 'Ask about the snapshot…' : 'Capture a snapshot first.'}
-          rows={3}
-          className="scrollbar-thin flex-1 resize-none rounded border border-panel-border bg-black/30 p-2 text-xs text-panel-text focus:border-panel-accent focus:outline-none"
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-              e.preventDefault();
-              send();
-            }
-          }}
-        />
+        <div className="min-w-0 flex-1">
+          <MarkdownEditor
+            value={input}
+            onChange={setInput}
+            onSubmit={send}
+            placeholder={snap ? 'Ask about the snapshot… (markdown supported)' : 'Capture a snapshot first.'}
+            rows={3}
+            disabled={!snap}
+          />
+        </div>
         <div className="flex flex-col gap-1">
           <button
             type="button"

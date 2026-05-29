@@ -11,11 +11,14 @@
     "postinstall": "wxt prepare"
   },
   "dependencies": {
+    "@uiw/react-json-view": "^2.0.0-alpha.43",
     "@xyflow/react": "^12.10.2",
     "bippy": "^0.5.41",
     "react": "^18.3.1",
     "react-arborist": "^3.8.0",
     "react-dom": "^18.3.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "turndown": "^7.2.4",
     "zustand": "^5.0.14"
   },
