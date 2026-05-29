@@ -6,6 +6,7 @@ import { MarkdownEditor } from '@/lib/ui/MarkdownEditor';
 import { summarizeModules } from '@/lib/modules/classify';
 import { formatBytes } from '@/lib/modules/sourcemap';
 import { PROMPT_PRESETS, type PromptPreset } from './prompts';
+import { saveSettings, type CustomPrompt } from '@/lib/storage/settings';
 
 interface Props {
   /** Called when the user clicks an empty-state preset CTA. Sets the Analyze
@@ -87,6 +88,11 @@ export default function InsightsTab({ onApplyPreset, setTab }: Props) {
         </div>
       </section>
 
+      {/* === Run a preset === always-visible gallery, not just empty state */}
+      <section className="border-b border-panel-border bg-panel-surface/30 px-4 py-3">
+        <PresetGallery onApplyPreset={onApplyPreset} />
+      </section>
+
       {/* === Generated diagrams === */}
       <section className="px-4 py-3">
         <div className="mb-2 flex items-center justify-between">
@@ -105,7 +111,11 @@ export default function InsightsTab({ onApplyPreset, setTab }: Props) {
         </div>
 
         {totalDiagrams === 0 ? (
-          <EmptyDiagrams onApplyPreset={onApplyPreset} />
+          <div className="rounded border border-dashed border-panel-border bg-panel-bg/20 p-3 text-[11px] text-panel-muted">
+            No diagrams yet. Pick a preset above to ask the LLM for one — any
+            reply containing a <code>```mermaid</code> block renders here
+            automatically.
+          </div>
         ) : (
           diagrams.map((turn) => (
             <div key={turn.turnId} className="mb-4">
@@ -311,34 +321,185 @@ function Card({
   );
 }
 
-function EmptyDiagrams({
+/**
+ * Always-visible gallery of preset buttons. Built-ins on top, user-defined
+ * prompts below with delete affordances. An "Add custom prompt" form is
+ * surfaced via a collapsible <details> so it doesn't compete for space.
+ */
+function PresetGallery({
   onApplyPreset,
 }: {
   onApplyPreset(preset: PromptPreset): void;
 }) {
+  const settings = useStore((s) => s.settings);
+  const customPrompts = settings.customPrompts ?? [];
+  const [showForm, setShowForm] = useState(false);
+  const [draftLabel, setDraftLabel] = useState('');
+  const [draftDescription, setDraftDescription] = useState('');
+  const [draftPrompt, setDraftPrompt] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  const persistCustomPrompts = async (next: CustomPrompt[]) => {
+    await saveSettings({ ...settings, customPrompts: next });
+    // The settings subscription in App.tsx will refresh the store.
+  };
+
+  const addCustom = async () => {
+    const label = draftLabel.trim();
+    const prompt = draftPrompt.trim();
+    if (!label) return setError('Name is required.');
+    if (!prompt) return setError('Prompt body is required.');
+    const id = 'custom-' + Date.now().toString(36);
+    const next: CustomPrompt[] = [
+      ...customPrompts,
+      { id, label, description: draftDescription.trim() || undefined, prompt },
+    ];
+    await persistCustomPrompts(next);
+    setDraftLabel('');
+    setDraftDescription('');
+    setDraftPrompt('');
+    setError(null);
+    setShowForm(false);
+  };
+
+  const deleteCustom = async (id: string) => {
+    await persistCustomPrompts(customPrompts.filter((p) => p.id !== id));
+  };
+
   return (
-    <div className="rounded border border-dashed border-panel-border bg-panel-bg/20 p-4">
-      <div className="mb-3 text-[12px] text-panel-text/90">
-        No diagrams yet. Run one of these in the Analyze tab — replies that
-        include <code>```mermaid</code> blocks render right here.
+    <div>
+      <div className="mb-2 flex items-center justify-between">
+        <h3 className="text-[11px] font-semibold uppercase tracking-wide text-panel-muted">
+          Run a preset
+        </h3>
+        <button
+          type="button"
+          onClick={() => setShowForm((v) => !v)}
+          className="text-[11px] text-panel-accent hover:text-sky-300"
+        >
+          {showForm ? 'Cancel' : '+ Add custom prompt'}
+        </button>
       </div>
+
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-        {PROMPT_PRESETS.filter((p) =>
-          ['component-architecture', 'module-federation', 'bundle-breakdown', 'data-flow', 'risk-review'].includes(
-            p.id,
-          ),
-        ).map((p) => (
-          <button
-            key={p.id}
-            type="button"
-            onClick={() => onApplyPreset(p)}
-            className="rounded border border-panel-border bg-panel-bg/60 p-2 text-left hover:border-panel-accent hover:bg-panel-bg"
-          >
-            <div className="text-[11px] font-semibold text-white">{p.label}</div>
-            <div className="mt-0.5 text-[10px] text-panel-muted">{p.description}</div>
-          </button>
+        {PROMPT_PRESETS.map((p) => (
+          <PresetButton key={p.id} preset={p} onApply={onApplyPreset} />
         ))}
       </div>
+
+      {customPrompts.length > 0 && (
+        <>
+          <h4 className="mb-2 mt-3 text-[10px] font-semibold uppercase tracking-wide text-panel-muted">
+            Your custom prompts ({customPrompts.length})
+          </h4>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {customPrompts.map((p) => (
+              <PresetButton
+                key={p.id}
+                preset={{ id: p.id, label: p.label, description: p.description ?? '', prompt: p.prompt }}
+                onApply={onApplyPreset}
+                onDelete={() => void deleteCustom(p.id)}
+              />
+            ))}
+          </div>
+        </>
+      )}
+
+      {showForm && (
+        <div className="mt-3 rounded border border-panel-border bg-panel-bg/40 p-3">
+          <div className="mb-2 text-[11px] font-semibold text-white">Add custom prompt</div>
+          <div className="space-y-2 text-[11px]">
+            <label className="block">
+              <span className="text-panel-muted">Name</span>
+              <input
+                type="text"
+                value={draftLabel}
+                onChange={(e) => setDraftLabel(e.target.value)}
+                placeholder="e.g. Accessibility audit"
+                className="mt-0.5 w-full rounded border border-panel-border bg-panel-bg px-2 py-1 text-[12px] text-panel-text"
+              />
+            </label>
+            <label className="block">
+              <span className="text-panel-muted">Description (optional)</span>
+              <input
+                type="text"
+                value={draftDescription}
+                onChange={(e) => setDraftDescription(e.target.value)}
+                placeholder="Short hint shown on the button"
+                className="mt-0.5 w-full rounded border border-panel-border bg-panel-bg px-2 py-1 text-[12px] text-panel-text"
+              />
+            </label>
+            <label className="block">
+              <span className="text-panel-muted">Prompt</span>
+              <textarea
+                value={draftPrompt}
+                onChange={(e) => setDraftPrompt(e.target.value)}
+                placeholder="What should the LLM do? Markdown supported."
+                rows={6}
+                className="mt-0.5 w-full rounded border border-panel-border bg-panel-bg p-2 font-mono text-[11px] text-panel-text"
+              />
+            </label>
+            {error && <div className="text-[11px] text-red-300">{error}</div>}
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowForm(false);
+                  setError(null);
+                }}
+                className="rounded border border-panel-border px-2 py-1 text-[11px] text-panel-muted hover:text-white"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void addCustom()}
+                className="rounded bg-panel-accent px-2 py-1 text-[11px] font-medium text-white hover:bg-sky-400"
+              >
+                Save prompt
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PresetButton({
+  preset,
+  onApply,
+  onDelete,
+}: {
+  preset: PromptPreset;
+  onApply(p: PromptPreset): void;
+  onDelete?: () => void;
+}) {
+  return (
+    <div className="group relative rounded border border-panel-border bg-panel-bg/60 hover:border-panel-accent">
+      <button
+        type="button"
+        onClick={() => onApply(preset)}
+        className="block w-full p-2 text-left"
+      >
+        <div className="text-[11px] font-semibold text-white">{preset.label}</div>
+        {preset.description && (
+          <div className="mt-0.5 text-[10px] text-panel-muted">{preset.description}</div>
+        )}
+      </button>
+      {onDelete && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
+          title="Delete this custom prompt"
+          className="absolute right-1 top-1 hidden rounded px-1 text-[10px] text-panel-muted hover:text-red-300 group-hover:block"
+        >
+          ✕
+        </button>
+      )}
     </div>
   );
 }

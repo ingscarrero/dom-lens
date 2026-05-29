@@ -60,6 +60,10 @@ export async function runCapture(ctx: CaptureContext, settings: Settings): Promi
         },
       );
 
+    // Reset enhance flow + raw tiles from any previous capture.
+    store.setRawTiles([]);
+    store.setEnhanceStatus({ status: 'idle' });
+
     if (settings.fullPageScreenshot) {
       const res = await captureFullPage({
         tabId: ctx.tabId,
@@ -83,12 +87,14 @@ export async function runCapture(ctx: CaptureContext, settings: Settings): Promi
       });
       if (res.ok) {
         screenshot = res.screenshot;
+        store.setRawTiles(res.rawTiles);
       } else {
         console.warn('[DOM Lens] full-page screenshot failed:', res.reason);
         // Fall back to viewport-only capture if full-page fails (e.g. tile cap)
         const vp = await captureViewportOnly(ctx.tabId, metrics, captureTile);
         if (vp.ok) {
           screenshot = vp.screenshot;
+          store.setRawTiles(vp.rawTiles);
           store.setCaptureError(
             `Full-page capture failed (${res.reason}). Fell back to visible-viewport.`,
           );
@@ -100,8 +106,12 @@ export async function runCapture(ctx: CaptureContext, settings: Settings): Promi
       }
     } else {
       const vp = await captureViewportOnly(ctx.tabId, metrics, captureTile);
-      if (vp.ok) screenshot = vp.screenshot;
-      else store.setCaptureError(`Screenshot failed: ${vp.reason}`);
+      if (vp.ok) {
+        screenshot = vp.screenshot;
+        store.setRawTiles(vp.rawTiles);
+      } else {
+        store.setCaptureError(`Screenshot failed: ${vp.reason}`);
+      }
     }
 
     store.setCaptureProgress({ step: 1, total: 1, phase: 'finalizing' });

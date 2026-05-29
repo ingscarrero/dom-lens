@@ -6,7 +6,8 @@ export type PanelToBg =
   | { type: 'lm.chat.start'; requestId: string; payload: LmChatPayload }
   | { type: 'lm.chat.cancel'; requestId: string }
   | { type: 'lm.test'; baseUrl: string; apiKey?: string }
-  | { type: 'net.fetch'; requestId: string; url: string; maxBytes?: number };
+  | { type: 'net.fetch'; requestId: string; url: string; maxBytes?: number }
+  | { type: 'lm.oneshot'; requestId: string; payload: LmChatPayload };
 
 export type BgToPanel =
   | { type: 'capture.tile.result'; requestId: string; ok: true; dataUrl: string }
@@ -16,7 +17,9 @@ export type BgToPanel =
   | { type: 'lm.chat.error'; requestId: string; message: string }
   | { type: 'lm.test.result'; ok: boolean; models?: string[]; message?: string }
   | { type: 'net.fetch.result'; requestId: string; ok: true; text: string; status: number; contentType?: string }
-  | { type: 'net.fetch.result'; requestId: string; ok: false; message: string };
+  | { type: 'net.fetch.result'; requestId: string; ok: false; message: string }
+  | { type: 'lm.oneshot.result'; requestId: string; ok: true; text: string }
+  | { type: 'lm.oneshot.result'; requestId: string; ok: false; message: string };
 
 export interface LmChatPayload {
   baseUrl: string;

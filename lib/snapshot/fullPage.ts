@@ -32,8 +32,22 @@ export interface CaptureFullPageDeps {
   getScrollPosition?: () => Promise<{ x: number; y: number } | null>;
 }
 
+/** A raw viewport tile captured at a specific scroll offset. Keeping these
+ * around the snapshot enables re-stitching: e.g. the AI-enhanced flow asks
+ * the LLM how much of each tile's top should be cropped, then composes a
+ * corrected image without re-capturing the page. */
+export interface RawTile {
+  /** Scroll position the tile was captured at (CSS px). */
+  x: number;
+  y: number;
+  /** Tile pixel dimensions (logical * dpr). */
+  pixelWidth: number;
+  pixelHeight: number;
+  dataUrl: string;
+}
+
 export type CaptureFullPageResult =
-  | { ok: true; screenshot: SnapshotScreenshot }
+  | { ok: true; screenshot: SnapshotScreenshot; rawTiles: RawTile[]; dpr: number }
   | { ok: false; reason: string };
 
 function loadImage(dataUrl: string): Promise<HTMLImageElement> {
@@ -170,6 +184,32 @@ export async function captureFullPage(deps: CaptureFullPageDeps): Promise<Captur
   }
 
   const dataUrl = canvas.toDataURL('image/png');
+
+  // We need to know each tile's actual pixel dimensions so re-stitching can
+  // crop accurately. Read them once via a quick decode pass — sneak that
+  // into the rawTiles result.
+  const sizedTiles: RawTile[] = [];
+  for (const t of tiles) {
+    try {
+      const img = await loadImage(t.dataUrl);
+      sizedTiles.push({
+        x: t.x,
+        y: t.y,
+        pixelWidth: img.naturalWidth,
+        pixelHeight: img.naturalHeight,
+        dataUrl: t.dataUrl,
+      });
+    } catch {
+      sizedTiles.push({
+        x: t.x,
+        y: t.y,
+        pixelWidth: Math.round(m.viewportWidth * dpr),
+        pixelHeight: Math.round(m.viewportHeight * dpr),
+        dataUrl: t.dataUrl,
+      });
+    }
+  }
+
   return {
     ok: true,
     screenshot: {
@@ -184,6 +224,8 @@ export async function captureFullPage(deps: CaptureFullPageDeps): Promise<Captur
       kind: 'fullpage',
       orientation: m.orientation,
     },
+    rawTiles: sizedTiles,
+    dpr,
   };
 }
 
@@ -194,19 +236,32 @@ export async function captureViewportOnly(
 ): Promise<CaptureFullPageResult> {
   const cap = await captureTile(tabId);
   if (!cap.ok) return { ok: false, reason: cap.message };
+  const dpr = metrics.devicePixelRatio || 1;
+  const pixelWidth = Math.round(metrics.viewportWidth * dpr);
+  const pixelHeight = Math.round(metrics.viewportHeight * dpr);
   return {
     ok: true,
     screenshot: {
       dataUrl: cap.dataUrl,
       width: metrics.viewportWidth,
       height: metrics.viewportHeight,
-      pixelWidth: Math.round(metrics.viewportWidth * metrics.devicePixelRatio),
-      pixelHeight: Math.round(metrics.viewportHeight * metrics.devicePixelRatio),
+      pixelWidth,
+      pixelHeight,
       originX: metrics.scrollX,
       originY: metrics.scrollY,
       tileCount: 1,
       kind: 'viewport',
       orientation: metrics.orientation,
     },
+    rawTiles: [
+      {
+        x: metrics.scrollX,
+        y: metrics.scrollY,
+        pixelWidth,
+        pixelHeight,
+        dataUrl: cap.dataUrl,
+      },
+    ],
+    dpr,
   };
 }

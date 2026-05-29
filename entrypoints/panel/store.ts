@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { Snapshot, HarEntry } from '@/lib/snapshot/types';
 import type { Settings } from '@/lib/storage/settings';
 import type { Tile } from '@/lib/snapshot/slicer';
+import type { RawTile } from '@/lib/snapshot/fullPage';
 import { DEFAULT_SETTINGS } from '@/lib/storage/settings';
 
 export type Tab =
@@ -55,6 +56,13 @@ interface State {
   /** One-shot prompt to seed the Analyze input. Used by Insights' preset CTAs
    * — the consumer reads it once on mount and clears it via `setPendingPrompt(null)`. */
   pendingPrompt: string | null;
+  /** Raw viewport tiles from the most recent capture. Kept around for the
+   * AI-enhanced restitch flow. Cleared when a new capture starts. */
+  rawTiles: RawTile[];
+  /** State of the AI-enhanced restitch round-trip. */
+  enhanceStatus: 'idle' | 'asking' | 'restitching' | 'done' | 'error';
+  enhanceError: string | null;
+  enhanceMessage: string | null;
 }
 
 interface Actions {
@@ -78,6 +86,12 @@ interface Actions {
   setSignificantOnly(v: boolean): void;
   setSubtreeRootId(id: string | null): void;
   setPendingPrompt(p: string | null): void;
+  setRawTiles(t: RawTile[]): void;
+  setEnhanceStatus(
+    s: { status: 'idle' | 'asking' | 'restitching' | 'done' | 'error'; message?: string | null; error?: string | null },
+  ): void;
+  /** Replace just the screenshot on the current snapshot (used after restitch). */
+  setSnapshotScreenshot(sc: Snapshot['screenshot']): void;
 }
 
 export const useStore = create<State & Actions>((set) => ({
@@ -97,6 +111,10 @@ export const useStore = create<State & Actions>((set) => ({
   significantOnly: true,
   subtreeRootId: null,
   pendingPrompt: null,
+  rawTiles: [],
+  enhanceStatus: 'idle',
+  enhanceError: null,
+  enhanceMessage: null,
   setTab: (t) => set({ tab: t }),
   setCapturing: (v) =>
     set({ capturing: v, captureError: v ? null : undefined, captureProgress: v ? null : null }),
@@ -154,4 +172,13 @@ export const useStore = create<State & Actions>((set) => ({
   setSignificantOnly: (v) => set({ significantOnly: v }),
   setSubtreeRootId: (id) => set({ subtreeRootId: id }),
   setPendingPrompt: (p) => set({ pendingPrompt: p }),
+  setRawTiles: (t) => set({ rawTiles: t }),
+  setEnhanceStatus: ({ status, message, error }) =>
+    set({
+      enhanceStatus: status,
+      enhanceMessage: message ?? null,
+      enhanceError: error ?? null,
+    }),
+  setSnapshotScreenshot: (sc) =>
+    set((s) => (s.snapshot ? { snapshot: { ...s.snapshot, screenshot: sc } } : {})),
 }));

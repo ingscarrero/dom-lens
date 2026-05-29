@@ -199,7 +199,7 @@ export default defineContentScript({
     }
 
     const api: DomLensApi = {
-      version: '0.3.2',
+      version: '0.3.3',
       capture(opts) {
         return runCapture(consoleBuffer, {
           maxMarkdownChars: opts?.maxMarkdownChars ?? 20000,

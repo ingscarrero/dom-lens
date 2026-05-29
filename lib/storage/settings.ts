@@ -1,3 +1,10 @@
+export interface CustomPrompt {
+  id: string;
+  label: string;
+  description?: string;
+  prompt: string;
+}
+
 export interface Settings {
   baseUrl: string;
   model: string;
@@ -18,6 +25,9 @@ export interface Settings {
   defaultSliceCount: number;
   /** Send sliced tiles instead of full image to multimodal models */
   sendSlicedTiles: boolean;
+  /** User-defined prompts that appear in the Insights gallery alongside
+   * the built-in PROMPT_PRESETS. */
+  customPrompts: CustomPrompt[];
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -35,6 +45,7 @@ export const DEFAULT_SETTINGS: Settings = {
   fullPageMaxTiles: 20,
   defaultSliceCount: 4,
   sendSlicedTiles: true,
+  customPrompts: [],
   systemPrompt:
     'You are a senior frontend engineer reviewing a web page snapshot. ' +
     'You receive a semantic markdown representation of the page DOM, ' +

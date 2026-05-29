@@ -4,12 +4,27 @@ import { sliceImage, suggestSliceCount } from '@/lib/snapshot/slicer';
 import { MarkdownRenderer } from '@/lib/ui/MarkdownRenderer';
 import { JsonViewer } from '@/lib/ui/JsonViewer';
 
-export default function SnapshotTab() {
+interface Props {
+  /** Called when the user clicks "Enhance with AI" — kicks off an LLM
+   * round-trip that asks the local model for per-tile trim offsets, then
+   * re-stitches the screenshot. Driven from App.tsx. */
+  onEnhanceWithAI(): void;
+}
+
+export default function SnapshotTab({ onEnhanceWithAI }: Props) {
   const snap = useStore((s) => s.snapshot);
   const settings = useStore((s) => s.settings);
   const focused = useStore((s) => s.focused);
   const tiles = useStore((s) => s.tiles);
   const setTiles = useStore((s) => s.setTiles);
+  const rawTiles = useStore((s) => s.rawTiles);
+  const enhanceStatus = useStore((s) => s.enhanceStatus);
+  const enhanceMessage = useStore((s) => s.enhanceMessage);
+  const enhanceError = useStore((s) => s.enhanceError);
+
+  const llmConfigured = !!settings.baseUrl && !!settings.model;
+  const enhanceBusy = enhanceStatus === 'asking' || enhanceStatus === 'restitching';
+  const canEnhance = llmConfigured && rawTiles.length > 1 && !enhanceBusy;
 
   const [showJson, setShowJson] = useState(false);
   const [markdownMode, setMarkdownMode] = useState<'rendered' | 'source'>('rendered');
@@ -105,20 +120,61 @@ export default function SnapshotTab() {
 
       {screenshot && (
         <div className="mb-3 rounded border border-panel-border bg-panel-surface p-2">
-          <div className="mb-1 flex items-center justify-between">
+          <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
             <div className="text-[10px] uppercase text-panel-muted">
               Screenshot — {screenshot.kind === 'fullpage' ? 'full page' : 'visible viewport'} ·{' '}
               {screenshot.width}×{screenshot.height} · {screenshot.tileCount} tile(s) ·{' '}
               {screenshot.orientation}
             </div>
-            <a
-              href={screenshot.dataUrl}
-              download={`dom-lens-${snap.id.slice(0, 8)}.png`}
-              className="text-[10px] text-panel-accent hover:underline"
-            >
-              download
-            </a>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onEnhanceWithAI}
+                disabled={!canEnhance}
+                title={
+                  !llmConfigured
+                    ? 'Configure a local model in Settings to enable AI enhancement.'
+                    : rawTiles.length <= 1
+                      ? 'Need at least 2 raw tiles to re-stitch — capture again.'
+                      : 'Ask the local LLM to analyze the tiles and re-stitch with corrected offsets.'
+                }
+                className="rounded border border-panel-accent/60 bg-panel-accent/10 px-2 py-0.5 text-[10px] font-medium text-panel-accent hover:bg-panel-accent/20 disabled:cursor-not-allowed disabled:border-panel-border disabled:bg-transparent disabled:text-panel-muted"
+              >
+                {enhanceBusy
+                  ? enhanceStatus === 'asking'
+                    ? 'Analyzing…'
+                    : 'Re-stitching…'
+                  : '✨ Enhance with AI'}
+              </button>
+              <a
+                href={screenshot.dataUrl}
+                download={`dom-lens-${snap.id.slice(0, 8)}.png`}
+                className="text-[10px] text-panel-accent hover:underline"
+              >
+                download
+              </a>
+            </div>
           </div>
+
+          {(enhanceStatus === 'asking' ||
+            enhanceStatus === 'restitching' ||
+            enhanceStatus === 'done' ||
+            enhanceStatus === 'error') && (
+            <div
+              className={
+                'mb-1 rounded border px-2 py-1 text-[10px] ' +
+                (enhanceStatus === 'error'
+                  ? 'border-red-500/40 bg-red-500/10 text-red-200'
+                  : enhanceStatus === 'done'
+                    ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+                    : 'border-sky-500/40 bg-sky-500/10 text-sky-200')
+              }
+            >
+              {enhanceStatus === 'error'
+                ? `AI enhance failed: ${enhanceError ?? 'unknown error'}`
+                : enhanceMessage ?? ''}
+            </div>
+          )}
           <div
             className="scrollbar-thin relative max-h-96 overflow-auto rounded border border-panel-border bg-black/30"
             style={{ resize: 'vertical' }}

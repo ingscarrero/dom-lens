@@ -95,6 +95,42 @@ export default defineBackground({
             activeStreams.delete(msg.requestId);
             return;
           }
+          if (msg.type === 'lm.oneshot') {
+            // Same as lm.chat.start but the panel doesn't want streaming —
+            // accumulate the deltas server-side and reply with the full
+            // text in a single message. Used by the AI-enhanced stitch flow
+            // where the user shouldn't see partial JSON dribble into the
+            // chat transcript.
+            const controller = new AbortController();
+            activeStreams.set(msg.requestId, controller);
+            let acc = '';
+            try {
+              for await (const chunk of chatStream(msg.payload, controller.signal)) {
+                if (chunk.delta) acc += chunk.delta;
+                if (chunk.done) break;
+              }
+              send({ type: 'lm.oneshot.result', requestId: msg.requestId, ok: true, text: acc });
+            } catch (e: any) {
+              if (e?.name === 'AbortError') {
+                send({
+                  type: 'lm.oneshot.result',
+                  requestId: msg.requestId,
+                  ok: false,
+                  message: 'cancelled',
+                });
+              } else {
+                send({
+                  type: 'lm.oneshot.result',
+                  requestId: msg.requestId,
+                  ok: false,
+                  message: e?.message ?? String(e),
+                });
+              }
+            } finally {
+              activeStreams.delete(msg.requestId);
+            }
+            return;
+          }
           if (msg.type === 'lm.test') {
             const result = await listModels(msg.baseUrl, msg.apiKey);
             if (result.ok) send({ type: 'lm.test.result', ok: true, models: result.models });

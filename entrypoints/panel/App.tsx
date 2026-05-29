@@ -12,6 +12,7 @@ import AnalyzeTab from './tabs/AnalyzeTab';
 import SettingsTab from './tabs/SettingsTab';
 import type { BgToPanel } from '@/lib/bridge/protocol';
 import { runCapture } from './captureFlow';
+import { runEnhanceStitch } from './enhanceFlow';
 import { callClearHighlight, callHighlight } from './hooks/useInspectedEval';
 import { createFetchProxy } from '@/lib/modules/fetchProxy';
 
@@ -30,6 +31,8 @@ type NetFetchResolver = (
     | { ok: true; text: string; status: number; contentType?: string }
     | { ok: false; message: string },
 ) => void;
+
+type OneshotResolver = (r: { ok: true; text: string } | { ok: false; message: string }) => void;
 
 export default function App() {
   const tab = useStore((s) => s.tab);
@@ -50,6 +53,8 @@ export default function App() {
   const tileWaitersRef = useRef(new Map<string, (r: { ok: true; dataUrl: string } | { ok: false; message: string }) => void>());
   // Track in-flight net.fetch promises by requestId
   const netFetchWaitersRef = useRef(new Map<string, NetFetchResolver>());
+  // Track in-flight lm.oneshot promises by requestId
+  const oneshotWaitersRef = useRef(new Map<string, OneshotResolver>());
 
   const port = usePort((msg: BgToPanel) => {
     if (msg.type === 'capture.tile.result') {
@@ -65,6 +70,13 @@ export default function App() {
         netFetchWaitersRef.current.delete(msg.requestId);
         if (msg.ok)
           waiter({ ok: true, text: msg.text, status: msg.status, contentType: msg.contentType });
+        else waiter({ ok: false, message: msg.message });
+      }
+    } else if (msg.type === 'lm.oneshot.result') {
+      const waiter = oneshotWaitersRef.current.get(msg.requestId);
+      if (waiter) {
+        oneshotWaitersRef.current.delete(msg.requestId);
+        if (msg.ok) waiter({ ok: true, text: msg.text });
         else waiter({ ok: false, message: msg.message });
       }
     } else if (msg.type === 'lm.chat.delta') {
@@ -161,7 +173,7 @@ export default function App() {
       <header className="flex items-center justify-between border-b border-panel-border bg-panel-surface px-3 py-2">
         <div className="flex items-center gap-2">
           <span className="text-sm font-semibold">DOM Lens</span>
-          <span className="text-xs text-panel-muted">v0.3.2</span>
+          <span className="text-xs text-panel-muted">v0.3.3</span>
         </div>
         <div className="flex items-center gap-2">
           {capturing && captureProgress && (
@@ -207,7 +219,19 @@ export default function App() {
       </nav>
 
       <main className="min-h-0 flex-1 overflow-hidden">
-        {tab === 'snapshot' && <SnapshotTab />}
+        {tab === 'snapshot' && (
+          <SnapshotTab
+            onEnhanceWithAI={() =>
+              runEnhanceStitch({
+                post: (m) => port.post(m),
+                awaitOneshot: (requestId) =>
+                  new Promise((resolve) => {
+                    oneshotWaitersRef.current.set(requestId, resolve);
+                  }),
+              })
+            }
+          />
+        )}
         {tab === 'components' && <ComponentsTab />}
         {tab === 'federation' && <FederationTab />}
         {tab === 'modules' && <ModulesTab fetchText={fetchText} />}
