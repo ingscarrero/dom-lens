@@ -41,7 +41,11 @@ export const DEFAULT_SETTINGS: Settings = {
     'an optional screenshot, and (when present) the React component tree and ' +
     'Module Federation topology. ' +
     'Answer the user concisely. When asked about architecture, infer the design ' +
-    'from component names, federation remotes, and exposed modules.',
+    'from component names, federation remotes, and exposed modules. ' +
+    'When emitting Mermaid diagrams, use ASCII only — no emoji, no smart quotes, ' +
+    'no em-dashes. Node IDs are [A-Za-z_][A-Za-z0-9_]*. Wrap labels with spaces ' +
+    'in brackets. Stick to one diagram type per fenced block. Do not emit theme ' +
+    'or style directives.',
 };
 
 const KEY = 'dom-lens.settings';

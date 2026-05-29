@@ -20,6 +20,16 @@ export interface CaptureFullPageDeps {
   delayMs?: number;
   /** Cap on number of tiles (covers chrome.tabs.captureVisibleTab quota). */
   maxTiles?: number;
+  /** Hide position:fixed/sticky on the page so they aren't recaptured every tile.
+   * Returns the number of elements hidden. Optional — when omitted we just
+   * skip the mitigation. */
+  beginFullPageCapture?: () => Promise<{ ok: boolean; hiddenCount: number }>;
+  /** Restore whatever beginFullPageCapture hid. Always called from finally. */
+  endFullPageCapture?: () => Promise<void>;
+  /** Read the actual current scroll position so we can verify scrollTo()
+   * landed. Used to detect scroll-locked or nested-scrolled pages where
+   * window.scrollTo silently does nothing. */
+  getScrollPosition?: () => Promise<{ x: number; y: number } | null>;
 }
 
 export type CaptureFullPageResult =
@@ -67,11 +77,53 @@ export async function captureFullPage(deps: CaptureFullPageDeps): Promise<Captur
 
   const tiles: Array<{ x: number; y: number; dataUrl: string }> = [];
   const delayMs = deps.delayMs ?? 80;
+  let stickyHidden = false;
+  // Track scroll-progress evidence so we can detect a scroll-locked or
+  // nested-scrolled page (where window.scrollTo silently does nothing). On
+  // such pages every "tile" captures the same viewport and the stitched
+  // output is N copies of the same content — exactly the artifact users
+  // hit on pages with custom inner-scroll layouts.
+  let scrollLockDetected: string | null = null;
   try {
     for (let i = 0; i < positions.length; i++) {
       const pos = positions[i];
       await deps.scrollTo(pos.x, pos.y);
       await new Promise((r) => setTimeout(r, delayMs));
+
+      // After the first tile, hide fixed/sticky elements so they don't get
+      // recaptured at every viewport offset. Standard scroll-and-stitch
+      // mitigation used by GoFullPage, Full Page Capture, etc.
+      if (i === 1 && !stickyHidden && deps.beginFullPageCapture) {
+        try {
+          await deps.beginFullPageCapture();
+          stickyHidden = true;
+          // Give the page a frame to reflow now that fixed elements are gone.
+          await new Promise((r) => setTimeout(r, 50));
+        } catch {
+          /* fall through — capture without the mitigation */
+        }
+      }
+
+      // Verify the scroll actually moved (only when we asked it to). If the
+      // page didn't budge, the scroller is somewhere else (inner div with
+      // overflow:auto, scroll-lock, etc.) and continuing would just produce
+      // duplicate tiles.
+      if (i > 0 && deps.getScrollPosition && (pos.x > 0 || pos.y > 0)) {
+        const actual = await deps.getScrollPosition();
+        if (actual) {
+          const dyExpected = pos.y;
+          const dxExpected = pos.x;
+          const dyActual = actual.y;
+          const dxActual = actual.x;
+          const yMissed = Math.abs(dyActual - dyExpected) > 30;
+          const xMissed = Math.abs(dxActual - dxExpected) > 30;
+          if (yMissed && xMissed) {
+            scrollLockDetected = `scroll did not advance — requested (${dxExpected},${dyExpected}), actual (${dxActual},${dyActual}). Page likely uses an inner scroller.`;
+            break;
+          }
+        }
+      }
+
       deps.onProgress?.({ step: i + 1, total: positions.length });
       const cap = await deps.captureTile(deps.tabId);
       if (!cap.ok) {
@@ -80,7 +132,21 @@ export async function captureFullPage(deps: CaptureFullPageDeps): Promise<Captur
       tiles.push({ x: pos.x, y: pos.y, dataUrl: cap.dataUrl });
     }
   } finally {
+    if (stickyHidden && deps.endFullPageCapture) {
+      try {
+        await deps.endFullPageCapture();
+      } catch {
+        /* ignore — page may have navigated */
+      }
+    }
     await deps.scrollTo(origX, origY);
+  }
+
+  if (scrollLockDetected) {
+    return { ok: false, reason: scrollLockDetected };
+  }
+  if (tiles.length === 0) {
+    return { ok: false, reason: 'no tiles captured' };
   }
 
   const dpr = m.devicePixelRatio || 1;

@@ -10,6 +10,11 @@ interface Props {
   /** Debounce window in ms. Defaults to 400 to avoid re-rendering on every
    * delta during streaming. Set to 0 to render immediately. */
   debounceMs?: number;
+  /** When true, the parent reply is still streaming from the LLM and the
+   * source may continue to grow. While set, we don't attempt to parse the
+   * diagram — partial Mermaid sources always fail to lex and we don't want
+   * to scare the user with intermediate "Mermaid error: …" boxes. */
+  streaming?: boolean;
 }
 
 /**
@@ -25,7 +30,7 @@ interface Props {
  * Falls back to a code block + error message when the final source still
  * doesn't parse.
  */
-export function MermaidBlock({ source, title, raw, debounceMs = 400 }: Props) {
+export function MermaidBlock({ source, title, raw, debounceMs = 400, streaming }: Props) {
   const [svg, setSvg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -47,6 +52,13 @@ export function MermaidBlock({ source, title, raw, debounceMs = 400 }: Props) {
 
   useEffect(() => {
     if (raw) return;
+    // Don't even attempt to parse while the parent reply is streaming.
+    // Partial Mermaid sources lex-fail with noisy errors that scare users —
+    // wait for streaming to finish before triggering a render.
+    if (streaming) {
+      if (svg === null) setPending(true);
+      return;
+    }
     if (!debouncedSource || !looksComplete(debouncedSource)) {
       // Partial / mid-stream source. Keep the previous SVG visible and wait.
       if (svg === null) setPending(true);
@@ -73,7 +85,7 @@ export function MermaidBlock({ source, title, raw, debounceMs = 400 }: Props) {
     // No cleanup needed beyond the token bump — we deliberately don't
     // clear `svg` here so the user keeps seeing the previous diagram while
     // the new one renders.
-  }, [debouncedSource, raw]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [debouncedSource, raw, streaming]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (raw) {
     return (
@@ -103,7 +115,11 @@ export function MermaidBlock({ source, title, raw, debounceMs = 400 }: Props) {
         />
       ) : (
         <div className="text-xs text-panel-muted">
-          {pending ? 'Rendering diagram…' : 'Waiting for diagram source…'}
+          {streaming
+            ? 'Receiving diagram tokens…'
+            : pending
+              ? 'Rendering diagram…'
+              : 'Waiting for diagram source…'}
         </div>
       )}
       {error && svg && (

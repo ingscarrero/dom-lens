@@ -100,7 +100,10 @@ function ChatTurnView({ turn }: { turn: import('../store').ChatTurn }) {
         </pre>
       ) : (
         <div className="relative">
-          <MarkdownRenderer source={turn.content || (turn.streaming ? '_…_' : '')} />
+          <MarkdownRenderer
+            source={turn.content || (turn.streaming ? '_…_' : '')}
+            streaming={turn.streaming}
+          />
           {turn.streaming && <span className="ml-0.5 inline-block animate-pulse">▍</span>}
         </div>
       )}

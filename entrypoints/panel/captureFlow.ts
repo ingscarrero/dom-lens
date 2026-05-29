@@ -5,7 +5,10 @@ import type { PanelToBg, BgToPanel } from '@/lib/bridge/protocol';
 import { classifyEntries } from '@/lib/modules/classify';
 import { mergeUrlEvidence } from '@/lib/modules/detect';
 import {
+  callBeginFullPageCapture,
   callDomLensCapture,
+  callEndFullPageCapture,
+  callGetScrollPosition,
   callScrollMetrics,
   callScrollTo,
 } from './hooks/useInspectedEval';
@@ -69,6 +72,14 @@ export async function runCapture(ctx: CaptureContext, settings: Settings): Promi
         // Chrome rate-limits captureVisibleTab to ~2/sec; stay under
         // and let the SW retry on quota errors.
         delayMs: 600,
+        // Hide position: fixed / sticky elements during tiles 2+ so they
+        // don't get re-stamped on every viewport offset of the stitched
+        // output.
+        beginFullPageCapture: callBeginFullPageCapture,
+        endFullPageCapture: callEndFullPageCapture,
+        // Detect scroll-locked / nested-scrolled pages by verifying that
+        // scrollTo() actually moved the viewport.
+        getScrollPosition: callGetScrollPosition,
       });
       if (res.ok) {
         screenshot = res.screenshot;

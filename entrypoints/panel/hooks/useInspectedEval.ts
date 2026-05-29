@@ -113,3 +113,36 @@ export async function callClearHighlight(): Promise<void> {
     `(function(){ try { window.__dom_lens__ && window.__dom_lens__.clearHighlight(); } catch(e) {} return 'ok'; })()`,
   );
 }
+
+export async function callBeginFullPageCapture(): Promise<{ ok: boolean; hiddenCount: number }> {
+  const res = await inspectedEval<string>(
+    `(function(){ try { return JSON.stringify(window.__dom_lens__ ? window.__dom_lens__.beginFullPageCapture() : { ok: false, hiddenCount: 0 }); } catch(e) { return JSON.stringify({ ok: false, hiddenCount: 0 }); } })()`,
+  );
+  if (res.isError || typeof res.value !== 'string') return { ok: false, hiddenCount: 0 };
+  try {
+    const v = JSON.parse(res.value);
+    return { ok: !!v?.ok, hiddenCount: Number(v?.hiddenCount) || 0 };
+  } catch {
+    return { ok: false, hiddenCount: 0 };
+  }
+}
+
+export async function callEndFullPageCapture(): Promise<void> {
+  await inspectedEval<string>(
+    `(function(){ try { window.__dom_lens__ && window.__dom_lens__.endFullPageCapture(); } catch(e) {} return 'ok'; })()`,
+  );
+}
+
+export async function callGetScrollPosition(): Promise<{ x: number; y: number } | null> {
+  const res = await inspectedEval<string>(
+    `(function(){ try { return JSON.stringify(window.__dom_lens__ ? window.__dom_lens__.getScrollPosition() : null); } catch(e) { return 'null'; } })()`,
+  );
+  if (res.isError || typeof res.value !== 'string') return null;
+  try {
+    const v = JSON.parse(res.value);
+    if (!v) return null;
+    return { x: Number(v.scrollX) || 0, y: Number(v.scrollY) || 0 };
+  } catch {
+    return null;
+  }
+}

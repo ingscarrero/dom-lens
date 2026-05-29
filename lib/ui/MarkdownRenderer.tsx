@@ -7,13 +7,17 @@ interface Props {
   source: string;
   className?: string;
   compact?: boolean;
+  /** When true, the source may still be growing (LLM streaming). Affects
+   * how MermaidBlock renders embedded diagrams: while streaming we suppress
+   * lexer errors and show a placeholder until the source stabilises. */
+  streaming?: boolean;
 }
 
 /**
  * Dark-panel-themed markdown renderer.
  * Safe by default — raw HTML in the source is NOT rendered.
  */
-function MarkdownRendererImpl({ source, className, compact }: Props) {
+function MarkdownRendererImpl({ source, className, compact, streaming }: Props) {
   return (
     <div
       className={
@@ -84,7 +88,7 @@ function MarkdownRendererImpl({ source, className, compact }: Props) {
             }
             // Auto-render mermaid fenced blocks as actual diagrams.
             if (lang === 'mermaid' && raw) {
-              return <MermaidBlock source={raw} />;
+              return <MermaidBlock source={raw} streaming={streaming} />;
             }
             return (
               <pre className="scrollbar-thin my-1 max-w-full overflow-auto rounded border border-panel-border bg-black/50 p-2 font-mono text-[11px] leading-snug">

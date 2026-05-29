@@ -26,6 +26,14 @@ interface DomLensApi {
   scrollTo(x: number, y: number): { ok: true; scrollX: number; scrollY: number };
   highlight(rect: HighlightRect): { ok: true };
   clearHighlight(): { ok: true };
+  /** Hide every position: fixed / sticky element so they don't get
+   * recaptured on each tile during scroll-and-stitch. Returns the count. */
+  beginFullPageCapture(): { ok: true; hiddenCount: number };
+  /** Restore the elements hidden by beginFullPageCapture. Idempotent. */
+  endFullPageCapture(): { ok: true; restoredCount: number };
+  /** Read the actual scroll position right now — used to verify a
+   * scrollTo() landed where we asked. */
+  getScrollPosition(): { scrollX: number; scrollY: number };
 }
 
 export default defineContentScript({
@@ -125,8 +133,73 @@ export default defineContentScript({
       return el;
     }
 
+    // Stores the per-element style overrides applied by beginFullPageCapture
+    // so endFullPageCapture can restore exact previous values. The map is
+    // keyed by the element itself; we use a WeakSet alongside to dedupe.
+    interface HiddenRecord {
+      el: HTMLElement;
+      origVisibility: string;
+      origPriority: string;
+    }
+    let hiddenSticky: HiddenRecord[] = [];
+
+    function snapshotAndHideFixedAndSticky(): number {
+      // Collect every element whose computed position is fixed or sticky.
+      // This is the classic duplication source for scroll-and-stitch
+      // screenshotters: a fixed header stays in the viewport for every
+      // tile, so the stitched output shows it repeated at viewport-height
+      // intervals. The standard fix is to hide them while capturing all
+      // tiles except the very first.
+      const all = document.body.getElementsByTagName('*');
+      const hits: HTMLElement[] = [];
+      for (let i = 0; i < all.length; i++) {
+        const el = all[i] as HTMLElement;
+        try {
+          const cs = getComputedStyle(el);
+          if (cs.position === 'fixed' || cs.position === 'sticky') {
+            // Skip our own highlight overlay
+            if (el.id === HIGHLIGHT_ID) continue;
+            hits.push(el);
+          }
+        } catch {
+          /* ignore — cross-origin frame contents etc */
+        }
+      }
+      hiddenSticky = hits.map((el) => {
+        const rec: HiddenRecord = {
+          el,
+          origVisibility: el.style.visibility,
+          origPriority: el.style.getPropertyPriority('visibility'),
+        };
+        el.style.setProperty('visibility', 'hidden', 'important');
+        return rec;
+      });
+      return hiddenSticky.length;
+    }
+
+    function restoreHiddenFixedAndSticky(): number {
+      const n = hiddenSticky.length;
+      for (const rec of hiddenSticky) {
+        try {
+          if (rec.origVisibility) {
+            rec.el.style.setProperty(
+              'visibility',
+              rec.origVisibility,
+              rec.origPriority || '',
+            );
+          } else {
+            rec.el.style.removeProperty('visibility');
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+      hiddenSticky = [];
+      return n;
+    }
+
     const api: DomLensApi = {
-      version: '0.3.1',
+      version: '0.3.2',
       capture(opts) {
         return runCapture(consoleBuffer, {
           maxMarkdownChars: opts?.maxMarkdownChars ?? 20000,
@@ -167,6 +240,15 @@ export default defineContentScript({
         const el = document.getElementById(HIGHLIGHT_ID);
         if (el) el.style.display = 'none';
         return { ok: true };
+      },
+      beginFullPageCapture() {
+        return { ok: true, hiddenCount: snapshotAndHideFixedAndSticky() };
+      },
+      endFullPageCapture() {
+        return { ok: true, restoredCount: restoreHiddenFixedAndSticky() };
+      },
+      getScrollPosition() {
+        return { scrollX: window.scrollX, scrollY: window.scrollY };
       },
     };
 
