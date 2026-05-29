@@ -2,6 +2,8 @@ import { captureFullPage, captureViewportOnly } from '@/lib/snapshot/fullPage';
 import type { Snapshot } from '@/lib/snapshot/types';
 import type { Settings } from '@/lib/storage/settings';
 import type { PanelToBg, BgToPanel } from '@/lib/bridge/protocol';
+import { classifyEntries } from '@/lib/modules/classify';
+import { mergeUrlEvidence } from '@/lib/modules/detect';
 import {
   callDomLensCapture,
   callScrollMetrics,
@@ -94,12 +96,19 @@ export async function runCapture(ctx: CaptureContext, settings: Settings): Promi
     store.setCaptureProgress({ step: 1, total: 1, phase: 'finalizing' });
 
     const network = useStore.getState().network;
+    const modules = classifyEntries(network);
+    const techStack = partial.techStack
+      ? mergeUrlEvidence(partial.techStack, modules.map((m) => m.url))
+      : mergeUrlEvidence({ matches: [], byCategory: {} }, modules.map((m) => m.url));
+
     const snapshot: Snapshot = {
       id: crypto.randomUUID(),
       capturedAt: Date.now(),
       screenshot,
       network,
+      modules,
       ...partial,
+      techStack,
     };
     store.setSnapshot(snapshot);
     store.clearNetwork();

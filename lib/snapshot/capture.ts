@@ -1,6 +1,7 @@
 import { serializeDom } from './serializeDom';
 import { walkAllFiberRoots } from '../react/walkFiber';
 import { detectFederation } from '../federation/detect';
+import { detectTechStackFromWindow } from '../modules/detect';
 import type { ConsoleEntry, PageMetrics, PartialSnapshot } from './types';
 
 export function readPageMetrics(): PageMetrics {
@@ -62,6 +63,12 @@ export function runCapture(
   const react = walkAllFiberRoots() || undefined;
   const fed = detectFederation();
   const federation = fed.detected ? fed : undefined;
+  let techStack: PartialSnapshot['techStack'];
+  try {
+    techStack = detectTechStackFromWindow();
+  } catch {
+    techStack = undefined;
+  }
 
   return {
     url: location.href,
@@ -81,5 +88,6 @@ export function runCapture(
       devicePixelRatio: window.devicePixelRatio,
     },
     pageMetrics: readPageMetrics(),
+    techStack,
   };
 }

@@ -1,6 +1,7 @@
 import { memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { MermaidBlock } from './MermaidBlock';
 
 interface Props {
   source: string;
@@ -69,14 +70,21 @@ function MarkdownRendererImpl({ source, className, compact }: Props) {
           pre: ({ children, ...rest }: any) => {
             // Try to surface the language label (from the inner <code className="language-xxx">)
             let lang: string | undefined;
+            let raw: string | undefined;
             const node: any = (rest as any).node;
             try {
               const codeNode = node?.children?.find((c: any) => c.tagName === 'code');
               const cls: string = codeNode?.properties?.className?.[0] ?? '';
               const m = /language-(\w+)/.exec(cls);
               if (m) lang = m[1];
+              const textChild = codeNode?.children?.find((c: any) => c.type === 'text');
+              if (textChild?.value) raw = String(textChild.value);
             } catch {
               /* ignore */
+            }
+            // Auto-render mermaid fenced blocks as actual diagrams.
+            if (lang === 'mermaid' && raw) {
+              return <MermaidBlock source={raw} />;
             }
             return (
               <pre className="scrollbar-thin my-1 max-w-full overflow-auto rounded border border-panel-border bg-black/50 p-2 font-mono text-[11px] leading-snug">

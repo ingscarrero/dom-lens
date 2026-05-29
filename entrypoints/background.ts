@@ -101,6 +101,40 @@ export default defineBackground({
             else send({ type: 'lm.test.result', ok: false, message: result.message });
             return;
           }
+          if (msg.type === 'net.fetch') {
+            const max = msg.maxBytes ?? 8 * 1024 * 1024; // 8 MB cap
+            try {
+              const res = await fetch(msg.url, { credentials: 'omit', redirect: 'follow' });
+              const contentType = res.headers.get('content-type') ?? undefined;
+              const buf = await res.arrayBuffer();
+              if (buf.byteLength > max) {
+                send({
+                  type: 'net.fetch.result',
+                  requestId: msg.requestId,
+                  ok: false,
+                  message: `Response too large (${buf.byteLength} bytes, max ${max})`,
+                });
+                return;
+              }
+              const text = new TextDecoder('utf-8', { fatal: false }).decode(buf);
+              send({
+                type: 'net.fetch.result',
+                requestId: msg.requestId,
+                ok: true,
+                text,
+                status: res.status,
+                contentType,
+              });
+            } catch (e: any) {
+              send({
+                type: 'net.fetch.result',
+                requestId: msg.requestId,
+                ok: false,
+                message: e?.message ?? String(e),
+              });
+            }
+            return;
+          }
         } catch {
           /* silently ignore unexpected handler errors */
         }

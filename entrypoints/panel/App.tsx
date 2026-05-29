@@ -6,19 +6,30 @@ import { loadSettings, onSettingsChanged } from '@/lib/storage/settings';
 import SnapshotTab from './tabs/SnapshotTab';
 import ComponentsTab from './tabs/ComponentsTab';
 import FederationTab from './tabs/FederationTab';
+import ModulesTab from './tabs/ModulesTab';
+import DiagramsTab from './tabs/DiagramsTab';
 import AnalyzeTab from './tabs/AnalyzeTab';
 import SettingsTab from './tabs/SettingsTab';
 import type { BgToPanel } from '@/lib/bridge/protocol';
 import { runCapture } from './captureFlow';
 import { callClearHighlight, callHighlight } from './hooks/useInspectedEval';
+import { createFetchProxy } from '@/lib/modules/fetchProxy';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'snapshot', label: 'Snapshot' },
   { id: 'components', label: 'Components' },
   { id: 'federation', label: 'Federation' },
+  { id: 'modules', label: 'Modules' },
+  { id: 'diagrams', label: 'Diagrams' },
   { id: 'analyze', label: 'Analyze' },
   { id: 'settings', label: 'Settings' },
 ];
+
+type NetFetchResolver = (
+  r:
+    | { ok: true; text: string; status: number; contentType?: string }
+    | { ok: false; message: string },
+) => void;
 
 export default function App() {
   const tab = useStore((s) => s.tab);
@@ -37,6 +48,8 @@ export default function App() {
 
   // Track in-flight tile.capture promises by requestId
   const tileWaitersRef = useRef(new Map<string, (r: { ok: true; dataUrl: string } | { ok: false; message: string }) => void>());
+  // Track in-flight net.fetch promises by requestId
+  const netFetchWaitersRef = useRef(new Map<string, NetFetchResolver>());
 
   const port = usePort((msg: BgToPanel) => {
     if (msg.type === 'capture.tile.result') {
@@ -44,6 +57,14 @@ export default function App() {
       if (waiter) {
         tileWaitersRef.current.delete(msg.requestId);
         if (msg.ok) waiter({ ok: true, dataUrl: msg.dataUrl });
+        else waiter({ ok: false, message: msg.message });
+      }
+    } else if (msg.type === 'net.fetch.result') {
+      const waiter = netFetchWaitersRef.current.get(msg.requestId);
+      if (waiter) {
+        netFetchWaitersRef.current.delete(msg.requestId);
+        if (msg.ok)
+          waiter({ ok: true, text: msg.text, status: msg.status, contentType: msg.contentType });
         else waiter({ ok: false, message: msg.message });
       }
     } else if (msg.type === 'lm.chat.delta') {
@@ -59,6 +80,14 @@ export default function App() {
           : { status: 'error', message: msg.message },
       );
     }
+  });
+
+  const fetchText = createFetchProxy({
+    post: (m) => port.post(m),
+    awaitResult: (requestId) =>
+      new Promise((resolve) => {
+        netFetchWaitersRef.current.set(requestId, resolve);
+      }),
   });
 
   useEffect(() => {
@@ -132,7 +161,7 @@ export default function App() {
       <header className="flex items-center justify-between border-b border-panel-border bg-panel-surface px-3 py-2">
         <div className="flex items-center gap-2">
           <span className="text-sm font-semibold">DOM Lens</span>
-          <span className="text-xs text-panel-muted">v0.2.1</span>
+          <span className="text-xs text-panel-muted">v0.3.0</span>
         </div>
         <div className="flex items-center gap-2">
           {capturing && captureProgress && (
@@ -181,6 +210,8 @@ export default function App() {
         {tab === 'snapshot' && <SnapshotTab />}
         {tab === 'components' && <ComponentsTab />}
         {tab === 'federation' && <FederationTab />}
+        {tab === 'modules' && <ModulesTab fetchText={fetchText} />}
+        {tab === 'diagrams' && <DiagramsTab />}
         {tab === 'analyze' && (
           <AnalyzeTab
             onSend={(payload, requestId) => {

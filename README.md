@@ -6,10 +6,12 @@ Everything runs locally. No telemetry, no remote services.
 
 ## Features
 
-- **Snapshot**: serialized DOM (raw HTML + markdown), visible-viewport PNG, captured console errors, network entries, viewport metrics.
+- **Snapshot**: serialized DOM (raw HTML + markdown), full-page or visible-viewport PNG, captured console errors, network entries, viewport metrics.
 - **Components**: collapsible React fiber tree — works without React DevTools installed. Detects function/class/memo/forwardRef components, skips host DOM nodes.
 - **Federation**: detects Webpack 5 Module Federation, Vite plugin-federation, Native Federation, and ESM import maps. Shows host ↔ remotes graph with exposed modules and load state.
-- **Analyze**: chat with a local LM Studio / Ollama model, automatically packaging the snapshot as context (markdown + optional screenshot for multimodal models). Streaming SSE.
+- **Modules**: classifies every JS/CSS/font/wasm asset loaded by the page (chunk kind, framework, bundler, library). Detects ~50 frameworks/libs from `window.*` globals + URL fingerprints. Click any module to lazy-fetch its `.map` and see a per-source byte breakdown.
+- **Diagrams**: auto-extracts ` ```mermaid ` fenced blocks from LLM replies and renders them as live SVG. Includes a scratchpad for iterating on a diagram.
+- **Analyze**: chat with a local LM Studio / Ollama model, automatically packaging the snapshot as context (markdown + optional screenshot for multimodal models). Streaming SSE. Includes architecture prompt presets (component map, federation map, bundle breakdown, data flow, risk review) that ask the model to reply with Mermaid diagrams.
 - **Settings**: configurable endpoint, model name, optional API key, snapshot composition toggles, system prompt.
 
 ## Tech stack
@@ -19,6 +21,9 @@ Everything runs locally. No telemetry, no remote services.
 - [`turndown`](https://github.com/mixmark-io/turndown) — HTML → markdown
 - [`react-arborist`](https://github.com/brimdata/react-arborist) — virtualized component tree
 - [`@xyflow/react`](https://reactflow.dev) — federation graph
+- [`source-map-js`](https://github.com/7rulnik/source-map-js) — VLQ parsing for per-source byte attribution
+- [`mermaid`](https://mermaid.js.org/) — auto-rendered architecture diagrams
+- [`react-markdown`](https://github.com/remarkjs/react-markdown) + [`remark-gfm`](https://github.com/remarkjs/remark-gfm) — markdown rendering in chat + DOM preview
 - [`zustand`](https://github.com/pmndrs/zustand) — panel state
 
 ## Build & install
@@ -48,7 +53,7 @@ WXT launches Chrome with the extension already loaded.
 1. Open DevTools (Cmd+Opt+I on macOS) on any page.
 2. Click the **DOM Lens** tab in the DevTools toolbar.
 3. Press **Capture snapshot**.
-4. Browse the **Snapshot**, **Components**, and **Federation** tabs for the captured data.
+4. Browse the **Snapshot**, **Components**, **Federation**, **Modules**, and **Diagrams** tabs for the captured data.
 5. Open **Settings** to configure the local AI endpoint (LM Studio defaults to `http://localhost:1234/v1`).
 6. Use the **Analyze** tab to chat with the model about the snapshot.
 

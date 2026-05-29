@@ -5,6 +5,7 @@ import { buildSnapshotPrompt, type SnapshotImage } from '@/lib/lm-studio/client'
 import type { Snapshot } from '@/lib/snapshot/types';
 import { MarkdownRenderer } from '@/lib/ui/MarkdownRenderer';
 import { MarkdownEditor } from '@/lib/ui/MarkdownEditor';
+import { PROMPT_PRESETS } from './prompts';
 
 interface Props {
   onSend(payload: LmChatPayload, requestId: string): void;
@@ -194,6 +195,22 @@ export default function AnalyzeTab({ onSend, onCancel }: Props) {
             Clear
           </button>
         </div>
+      </div>
+
+      <div className="flex flex-wrap gap-1.5 border-b border-panel-border bg-panel-surface/60 px-3 py-2 text-[11px]">
+        <span className="text-panel-muted">Presets:</span>
+        {PROMPT_PRESETS.map((p) => (
+          <button
+            key={p.id}
+            type="button"
+            title={p.description}
+            disabled={!snap || !!chatRequestId}
+            className="rounded border border-panel-border bg-panel-bg px-2 py-0.5 text-panel-text/90 hover:border-panel-accent hover:text-white disabled:opacity-50"
+            onClick={() => setInput(p.prompt)}
+          >
+            {p.label}
+          </button>
+        ))}
       </div>
 
       <div className="scrollbar-thin flex-1 space-y-3 overflow-auto p-3 text-xs">

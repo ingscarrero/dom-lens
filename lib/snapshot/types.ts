@@ -1,5 +1,6 @@
 import type { ComponentNode } from '../react/fiberToTree';
 import type { FederationGraph } from '../federation/graph';
+import type { LoadedModule, TechStack } from '../modules/types';
 
 export interface ConsoleEntry {
   level: 'log' | 'info' | 'warn' | 'error' | 'debug';
@@ -49,6 +50,9 @@ export interface PartialSnapshot {
   webVitals?: WebVitals;
   viewport: { width: number; height: number; devicePixelRatio: number };
   pageMetrics: PageMetrics;
+  /** Detected tech stack from window globals + in-page scripts. URL evidence
+   * is folded in panel-side from devtools network entries. */
+  techStack?: TechStack;
 }
 
 export type ScreenshotKind = 'viewport' | 'fullpage';
@@ -76,4 +80,7 @@ export interface Snapshot extends PartialSnapshot {
   capturedAt: number;
   screenshot: SnapshotScreenshot | null;
   network: HarEntry[];
+  /** Network-derived module list, classified panel-side. Sourcemaps are
+   * fetched lazily on demand (sourceMapStatus starts as 'unknown'). */
+  modules: LoadedModule[];
 }

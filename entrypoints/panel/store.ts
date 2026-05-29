@@ -4,7 +4,14 @@ import type { Settings } from '@/lib/storage/settings';
 import type { Tile } from '@/lib/snapshot/slicer';
 import { DEFAULT_SETTINGS } from '@/lib/storage/settings';
 
-export type Tab = 'snapshot' | 'components' | 'federation' | 'analyze' | 'settings';
+export type Tab =
+  | 'snapshot'
+  | 'components'
+  | 'federation'
+  | 'modules'
+  | 'diagrams'
+  | 'analyze'
+  | 'settings';
 
 export interface FocusedComponent {
   id: string;
