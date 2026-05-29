@@ -22,30 +22,89 @@ function readWebpackContainers(): { name: string; entry: string; exposes: string
     }
   }
 
+  // Build a set of frame names — pages with cross-origin <iframe name="x">
+  // expose the iframe's contentWindow as window.x. Touching .get/.init on a
+  // cross-origin Window throws "Blocked a frame from accessing a cross-origin
+  // frame". Skip these by name AND defensively try/catch every cross-window
+  // read just in case.
+  const frameNames = new Set<string>();
+  try {
+    document.querySelectorAll('iframe[name], frame[name]').forEach((f) => {
+      const n = (f as HTMLIFrameElement).name;
+      if (n) frameNames.add(n);
+    });
+  } catch {
+    /* ignore */
+  }
+
+  const isSafeContainerCandidate = (val: unknown): val is { get: Function; init: Function } => {
+    if (!val || typeof val !== 'object') return false;
+    // Reject cross-origin / same-origin Windows. We accept either a thrown
+    // access or a successful `window`-ish read as "skip".
+    try {
+      if ((val as any) === window) return false;
+      // Window has a `self === window` invariant; using it as a probe is
+      // cheaper than instanceof Window and safer cross-origin.
+      // (Accessing `.self` on a cross-origin Window throws, which is caught.)
+      const selfRef = (val as any).self;
+      if (selfRef && selfRef === val) return false;
+    } catch {
+      return false;
+    }
+    try {
+      return typeof (val as any).get === 'function' && typeof (val as any).init === 'function';
+    } catch {
+      return false;
+    }
+  };
+
+  const safeKeys = (() => {
+    try {
+      return Object.keys(w);
+    } catch {
+      return [] as string[];
+    }
+  })();
+
   const seen = new Set<string>();
-  for (const key of Object.keys(w)) {
+  for (const key of safeKeys) {
     if (seen.has(key)) continue;
     if (/^(_|\$)/.test(key)) continue;
-    const val = w[key];
-    if (!val || typeof val !== 'object') continue;
-    if (typeof val.get === 'function' && typeof val.init === 'function') {
-      const entry =
-        remoteEntryByContainer.get(key) ||
-        Array.from(remoteEntryByContainer.values()).find((u) => u.includes(key)) ||
-        '(unknown)';
-      const exposes: string[] = [];
-      const moduleMap = val.moduleMap || val._modules || {};
+    if (frameNames.has(key)) continue;
+    let val: any;
+    try {
+      val = w[key];
+    } catch {
+      continue;
+    }
+    if (!isSafeContainerCandidate(val)) continue;
+    const entry =
+      remoteEntryByContainer.get(key) ||
+      Array.from(remoteEntryByContainer.values()).find((u) => u.includes(key)) ||
+      '(unknown)';
+    const exposes: string[] = [];
+    try {
+      const anyVal = val as any;
+      const moduleMap = anyVal.moduleMap || anyVal._modules || {};
       if (moduleMap && typeof moduleMap === 'object') {
         exposes.push(...Object.keys(moduleMap));
       }
-      remotes.push({ name: key, entry, exposes, loaded: true });
-      seen.add(key);
+    } catch {
+      /* ignore */
     }
+    remotes.push({ name: key, entry, exposes, loaded: true });
+    seen.add(key);
   }
 
   for (const [name, entry] of remoteEntryByContainer) {
     if (!remotes.find((r) => r.name === name || r.entry === entry)) {
-      remotes.push({ name, entry, exposes: [], loaded: !!w[name] });
+      let loaded = false;
+      try {
+        loaded = !!w[name];
+      } catch {
+        loaded = false;
+      }
+      remotes.push({ name, entry, exposes: [], loaded });
     }
   }
 
@@ -71,6 +130,24 @@ function readImportMap(): { name: string; url: string }[] {
 }
 
 export function detectFederation(): FederationGraph {
+  try {
+    return detectFederationInternal();
+  } catch (e) {
+    // Belt-and-suspenders: a single unhandled error here must never block
+    // the rest of the snapshot pipeline. Surface the reason as a signal so
+    // we can debug from the panel without crashing.
+    const reason = (e as Error)?.message ?? String(e);
+    return {
+      kind: 'unknown',
+      detected: false,
+      host: { name: location.hostname, shared: [] },
+      remotes: [],
+      signals: [`detect_error: ${reason.slice(0, 200)}`],
+    };
+  }
+}
+
+function detectFederationInternal(): FederationGraph {
   const w = window as any;
   const signals: string[] = [];
 
@@ -79,7 +156,7 @@ export function detectFederation(): FederationGraph {
   const viteFederation =
     tryGet(() => w.__federation__) ||
     tryGet(() => w.__federation_method_getRemote) ||
-    Object.keys(w).find((k) => k.startsWith('__federation_method_'));
+    tryGet(() => Object.keys(w).find((k) => k.startsWith('__federation_method_')));
   const nativeFederation = tryGet(() => w.__FEDERATION__);
   const importMap = readImportMap();
 
