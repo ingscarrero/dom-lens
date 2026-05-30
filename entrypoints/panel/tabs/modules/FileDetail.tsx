@@ -10,6 +10,7 @@ import {
 } from '@/lib/modules/analyzeFile';
 import type { StreamingOneshot } from '@/lib/lm-studio/streamingProxy';
 import { MarkdownRenderer } from '@/lib/ui/MarkdownRenderer';
+import { CodeViewer } from '@/lib/ui/CodeViewer';
 import { formatBytes } from '@/lib/modules/sourcemap';
 
 interface Props {
@@ -114,17 +115,23 @@ export function FileDetail({ node, streamingOneshot }: Props) {
       </header>
 
       <div className="grid min-h-0 flex-1 grid-rows-[1fr_auto]">
-        <pre
-          className="scrollbar-thin m-0 overflow-auto bg-black/30 p-2 font-mono text-[11px] leading-snug text-panel-text"
-        >
-          <code>
-            {hasSource
-              ? sourceContent
-              : '/* No source content embedded in the sourcemap.\n' +
-                ' * The bundler likely used `nosources-source-map` or stripped sourcesContent\n' +
-                ' * for this file. Try fetching the deployed bundle instead. */'}
-          </code>
-        </pre>
+        <div className="min-h-0 overflow-hidden">
+          {hasSource ? (
+            <CodeViewer
+              code={sourceContent ?? ''}
+              language={language}
+              filename={node.sourcePath ?? node.name}
+            />
+          ) : (
+            <pre className="m-0 overflow-auto bg-black/30 p-2 font-mono text-[11px] leading-snug text-panel-text">
+              <code>
+                {'/* No source content embedded in the sourcemap.\n' +
+                  ' * The bundler likely used `nosources-source-map` or stripped sourcesContent\n' +
+                  ' * for this file. Try fetching the deployed bundle instead. */'}
+              </code>
+            </pre>
+          )}
+        </div>
 
         {result && (
           <div

@@ -17,6 +17,7 @@ import {
 } from '@/lib/modules/moduleTree';
 import { ModulesTree } from './modules/ModulesTree';
 import { FileDetail } from './modules/FileDetail';
+import { ModuleAnalysis } from './modules/ModuleAnalysis';
 import { buildReformatPayload, parseReformatResponse, languageLabel } from '@/lib/modules/reformat';
 import { extractSkeleton, symbolLabel, type Skeleton, type SkeletonSymbol } from '@/lib/modules/skeleton';
 import { buildSymbolSummaryPayload } from '@/lib/modules/summarizeSymbol';
@@ -45,6 +46,10 @@ export default function ModulesTab({
   const [viewMode, setViewMode] = useState<'tree' | 'flat'>('tree');
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedFileNode, setSelectedFileNode] = useState<ModuleTreeNode | null>(null);
+  /** Selected module node (📦) — drives the ModuleAnalysis right pane.
+   * Set whenever the user clicks a module or a source-folder; cleared
+   * when the user picks a non-module / non-source-folder elsewhere. */
+  const [selectedModuleNode, setSelectedModuleNode] = useState<ModuleTreeNode | null>(null);
   /** Sourcemaps the user has requested expanded under a module node, keyed
    * by the module's id (URL). Resetting this on snapshot change ensures
    * stale expansions don't bleed across captures. */
@@ -121,6 +126,7 @@ export default function ModulesTab({
     setModuleFetchState(new Map());
     setModuleFetchError(new Map());
     setSelectedFileNode(null);
+    setSelectedModuleNode(null);
     setSelectedNodeId(null);
   }, [snap?.id]);
 
@@ -385,7 +391,27 @@ export default function ModulesTab({
               selectedId={selectedNodeId}
               onSelect={(node) => {
                 setSelectedNodeId(node.id);
-                if (node.type === 'source-file') setSelectedFileNode(node);
+                if (node.type === 'source-file') {
+                  setSelectedFileNode(node);
+                  // Keep the module pane visible too — user might switch
+                  // back from a file to the module-level analysis.
+                } else if (node.type === 'module') {
+                  setSelectedModuleNode(node);
+                  setSelectedFileNode(null);
+                } else if (node.type === 'source-folder') {
+                  // The "Authored sources" root sits directly under a
+                  // module — walk up the tree (we don't have a parent
+                  // pointer, so just look for the module by stripping the
+                  // trailing #sources from the id).
+                  const moduleId = node.id.replace(/#sources(?:\/.*)?$/, '');
+                  if (tree) {
+                    const m = findModuleNodeById(tree, moduleId);
+                    if (m) {
+                      setSelectedModuleNode(m);
+                      setSelectedFileNode(null);
+                    }
+                  }
+                }
               }}
               onExpandModule={(node) => void handleExpandModule(node)}
               statusForUrl={(url, moduleNodeId) => {
@@ -432,19 +458,53 @@ export default function ModulesTab({
             </div>
           </div>
           <div className="min-h-0 overflow-hidden">
-            {selectedFileNode ? (
-              <FileDetail
-                node={selectedFileNode}
-                streamingOneshot={streamingOneshot}
-              />
-            ) : (
-              <div className="flex h-full items-center justify-center p-6 text-center text-[11px] text-panel-muted">
-                Select a source file on the left to view its content and run
-                an AI analysis (Audit / Improve / Explain). Expand a deployed
-                module 📦 to fetch its sourcemap and surface the original
-                files.
-              </div>
-            )}
+            {(() => {
+              // Selection priority: a source-file always wins so the
+              // user can flip between files in the same module without
+              // re-clicking the parent. If no file is picked but the
+              // module's sourcemap is loaded, show ModuleAnalysis.
+              if (selectedFileNode) {
+                return (
+                  <FileDetail
+                    node={selectedFileNode}
+                    streamingOneshot={streamingOneshot}
+                  />
+                );
+              }
+              if (selectedModuleNode?.module) {
+                const sm = moduleExpansions.get(selectedModuleNode.id);
+                if (sm) {
+                  return (
+                    <ModuleAnalysis
+                      module={selectedModuleNode.module}
+                      sourcemap={sm}
+                      streamingOneshot={streamingOneshot}
+                    />
+                  );
+                }
+                return (
+                  <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-[11px] text-panel-muted">
+                    <div>
+                      Sourcemap not loaded yet for{' '}
+                      <span className="font-mono">{selectedModuleNode.module.pathname}</span>.
+                    </div>
+                    <div>
+                      Expand the module 📦 to fetch it, then come back here
+                      for the module-level analysis (architecture overview,
+                      visual dashboard, risk audit, etc.).
+                    </div>
+                  </div>
+                );
+              }
+              return (
+                <div className="flex h-full items-center justify-center p-6 text-center text-[11px] text-panel-muted">
+                  Select a module 📦 on the left for a module-level analysis
+                  (architecture / dashboard / risk / optimization / diagram /
+                  ideas), or pick an individual source file 📄 for the
+                  file-level Audit / Improve / Explain actions.
+                </div>
+              );
+            })()}
           </div>
         </div>
       )}
