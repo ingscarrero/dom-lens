@@ -100,6 +100,81 @@ What you should see, per chunk kind:
   `main.js` (~200 KB) to see why "beautify everything" is the wrong
   default UX.
 
+## Detecting sourcemap availability
+
+Before we even reach the "no sourcemap, fall back to skeleton" branch we
+want to know how many modules in the snapshot *do* have a sourcemap.
+Three layered signals, cheapest to most expensive:
+
+1. **`SourceMap` response header** (free, no probe). TypeScript's
+   `--sourceMap`, Webpack's `devtool: 'source-map'`, Vite's
+   `build.sourcemap: true`, Rollup's `sourcemap: true`, and Babel's
+   `sourceMaps: true` all *can* emit this header — though by default
+   most servers don't forward it. When present, we get the absolute
+   sourcemap URL with zero extra work. `useNetwork.ts` plucks it out
+   of the HAR `response.headers` array as each request finishes.
+
+2. **`<url>.map` HEAD probe** (one round-trip per module). For
+   modules without the header, we fire a HEAD against the
+   conventional `.map` sibling. The background SW falls back to
+   `Range: 0-0` GET when the server rejects HEAD (some CDNs do).
+   Any 2xx → `found`, any 4xx → `missing`, network error →
+   `error`. We strip query strings before probing so cache-busted
+   URLs don't get false negatives.
+
+3. **Full fetch + parse** (lazy, on user action). When the user
+   actually expands a module row, `fetchAndParseSourceMap` does
+   the real download + VLQ walk. By that point we already know
+   whether it'll succeed.
+
+### Concurrency
+
+The probe pass naturally parallelises — each module is independent.
+`lib/concurrency/pool.ts` exposes `runPool(items, fn, { concurrency })`
+that runs at most N jobs at a time, with a **hard cap at 4**:
+
+```ts
+export const MAX_CONCURRENCY = 4;
+export const DEFAULT_CONCURRENCY = 4;
+```
+
+The cap is deliberate:
+
+- Browsers cap concurrent connections per origin at 6 (Chrome,
+  Firefox). Issuing more in-flight HEAD requests than that just
+  queues them at the socket layer — no speedup, more memory churn.
+- Local LLM servers (LM Studio default, Ollama via
+  `OLLAMA_NUM_PARALLEL`) typically expose ~4 parallel inference
+  slots. Pushing more concurrent LLM calls than that just queues at
+  the model server.
+- 4 is the empirical sweet spot: a 200-module probe finishes in
+  ~3-5s on a typical site, fast enough to be useful as an
+  on-mount pass without being aggressive enough to flag bot
+  detection.
+
+The pool surface returns ordered results regardless of completion
+order, and isolates per-job failures (one 500 doesn't take down the
+batch). Progress is reported continuously so the Modules tab's
+summary card can show `probing 12/45…` while the pool churns.
+
+### The summary card
+
+The top-of-tab card collapses the probe records into four counters:
+
+- `✓ declared` — header was present.
+- `✓ found` — HEAD probe returned 2xx.
+- `✗ missing` — HEAD probe returned 4xx.
+- `— N/A` — module kind doesn't have sourcemaps (images, fonts,
+  wasm, …).
+
+Plus a parenthetical "X of Y JS/CSS available" so the user can
+estimate at a glance how much of the bundle is debuggable. Per-row
+badges show the same status in the rightmost column.
+
+When the probe says `missing` for a module, expanding the row no
+longer triggers a wasted fetch+parse attempt — the detail view
+jumps straight to the `🗺 Map module` UX.
+
 ## When to extend
 
 If a real bundle reliably defeats the regex extractor (no symbols

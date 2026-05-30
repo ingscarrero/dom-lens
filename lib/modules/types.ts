@@ -61,7 +61,29 @@ export interface LoadedModule {
   startedDateTime?: string;
   classification: ModuleClassification;
   sourceMapUrl?: string;
-  sourceMapStatus: 'unknown' | 'present' | 'absent' | 'fetched' | 'error';
+  /**
+   * Layered availability signal:
+   *   - 'declared'  — page sent a `SourceMap`/`X-SourceMap` response header
+   *                   pointing to the .map. Strongest signal short of fetching.
+   *   - 'found'     — HEAD probe on the conventional `<url>.map` sibling
+   *                   returned 2xx.
+   *   - 'missing'   — HEAD probe returned 404 (or another 4xx/5xx).
+   *   - 'fetched'   — we've actually downloaded + parsed the .map.
+   *   - 'error'     — fetch+parse attempted and failed.
+   *   - 'probing'   — probe in flight.
+   *   - 'unknown'   — never probed.
+   *   - 'absent' / 'present' — legacy aliases kept for backward-compat.
+   */
+  sourceMapStatus:
+    | 'unknown'
+    | 'declared'
+    | 'found'
+    | 'missing'
+    | 'probing'
+    | 'present'
+    | 'absent'
+    | 'fetched'
+    | 'error';
   /** Populated lazily after fetch+parse */
   sourceMap?: ParsedSourceMap;
   sourceMapError?: string;

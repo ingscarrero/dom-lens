@@ -40,3 +40,36 @@ export function isNetFetchResult(
 ): msg is Extract<BgToPanel, { type: 'net.fetch.result' }> {
   return msg.type === 'net.fetch.result';
 }
+
+/**
+ * HEAD-probe helper. Returns the HTTP status code (0 on error) and the
+ * content-type/length when available. Used by the sourcemap probe pass
+ * to detect `.map` siblings without downloading them.
+ */
+export interface HeadProxyDeps {
+  post(msg: PanelToBg): void;
+  awaitResult(
+    requestId: string,
+  ): Promise<
+    | { ok: true; status: number; contentType?: string; contentLength?: number }
+    | { ok: false; message: string }
+  >;
+}
+
+export type HeadProxy = (url: string) => Promise<{
+  status: number;
+  contentType?: string;
+  contentLength?: number;
+  error?: string;
+}>;
+
+export function createHeadProxy(deps: HeadProxyDeps): HeadProxy {
+  return async (url: string) => {
+    const requestId = crypto.randomUUID();
+    const pending = deps.awaitResult(requestId);
+    deps.post({ type: 'net.head', requestId, url });
+    const res = await pending;
+    if (!res.ok) return { status: 0, error: res.message };
+    return { status: res.status, contentType: res.contentType, contentLength: res.contentLength };
+  };
+}

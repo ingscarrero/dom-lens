@@ -14,7 +14,7 @@ import type { BgToPanel } from '@/lib/bridge/protocol';
 import { runCapture } from './captureFlow';
 import { runEnhanceStitch } from './enhanceFlow';
 import { callClearHighlight, callHighlight } from './hooks/useInspectedEval';
-import { createFetchProxy } from '@/lib/modules/fetchProxy';
+import { createFetchProxy, createHeadProxy } from '@/lib/modules/fetchProxy';
 import { createOneshotProxy } from '@/lib/lm-studio/oneshotProxy';
 import { createStreamingProxy, type StreamHandlers } from '@/lib/lm-studio/streamingProxy';
 
@@ -31,6 +31,12 @@ const TABS: { id: Tab; label: string }[] = [
 type NetFetchResolver = (
   r:
     | { ok: true; text: string; status: number; contentType?: string }
+    | { ok: false; message: string },
+) => void;
+
+type NetHeadResolver = (
+  r:
+    | { ok: true; status: number; contentType?: string; contentLength?: number }
     | { ok: false; message: string },
 ) => void;
 
@@ -55,6 +61,8 @@ export default function App() {
   const tileWaitersRef = useRef(new Map<string, (r: { ok: true; dataUrl: string } | { ok: false; message: string }) => void>());
   // Track in-flight net.fetch promises by requestId
   const netFetchWaitersRef = useRef(new Map<string, NetFetchResolver>());
+  // Track in-flight net.head promises by requestId
+  const netHeadWaitersRef = useRef(new Map<string, NetHeadResolver>());
   // Track in-flight lm.oneshot promises by requestId
   const oneshotWaitersRef = useRef(new Map<string, OneshotResolver>());
   // Track streaming lm.stream handlers by requestId
@@ -74,6 +82,19 @@ export default function App() {
         netFetchWaitersRef.current.delete(msg.requestId);
         if (msg.ok)
           waiter({ ok: true, text: msg.text, status: msg.status, contentType: msg.contentType });
+        else waiter({ ok: false, message: msg.message });
+      }
+    } else if (msg.type === 'net.head.result') {
+      const waiter = netHeadWaitersRef.current.get(msg.requestId);
+      if (waiter) {
+        netHeadWaitersRef.current.delete(msg.requestId);
+        if (msg.ok)
+          waiter({
+            ok: true,
+            status: msg.status,
+            contentType: msg.contentType,
+            contentLength: msg.contentLength,
+          });
         else waiter({ ok: false, message: msg.message });
       }
     } else if (msg.type === 'lm.oneshot.result') {
@@ -109,6 +130,14 @@ export default function App() {
     awaitResult: (requestId) =>
       new Promise((resolve) => {
         netFetchWaitersRef.current.set(requestId, resolve);
+      }),
+  });
+
+  const headProbe = createHeadProxy({
+    post: (m) => port.post(m),
+    awaitResult: (requestId) =>
+      new Promise((resolve) => {
+        netHeadWaitersRef.current.set(requestId, resolve);
       }),
   });
 
@@ -198,7 +227,7 @@ export default function App() {
       <header className="flex items-center justify-between border-b border-panel-border bg-panel-surface px-3 py-2">
         <div className="flex items-center gap-2">
           <span className="text-sm font-semibold">DOM Lens</span>
-          <span className="text-xs text-panel-muted">v0.3.7</span>
+          <span className="text-xs text-panel-muted">v0.3.8</span>
         </div>
         <div className="flex items-center gap-2">
           {capturing && captureProgress && (
@@ -266,6 +295,7 @@ export default function App() {
             fetchText={fetchText}
             oneshot={oneshot}
             streamingOneshot={streamingOneshot}
+            headProbe={headProbe}
           />
         )}
         {tab === 'insights' && (

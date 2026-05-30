@@ -179,6 +179,46 @@ export default defineBackground({
             else send({ type: 'lm.test.result', ok: false, message: result.message });
             return;
           }
+          if (msg.type === 'net.head') {
+            // Lightweight existence probe — used to detect .map siblings
+            // without downloading them. Some servers reject HEAD; fall
+            // back to a GET with a Range: 0-0 request, which most CDNs
+            // honour and reply to with 206 Partial Content.
+            try {
+              let res: Response;
+              try {
+                res = await fetch(msg.url, {
+                  method: 'HEAD',
+                  credentials: 'omit',
+                  redirect: 'follow',
+                });
+              } catch {
+                res = await fetch(msg.url, {
+                  method: 'GET',
+                  credentials: 'omit',
+                  redirect: 'follow',
+                  headers: { Range: 'bytes=0-0' },
+                });
+              }
+              const len = Number(res.headers.get('content-length') ?? '0') || undefined;
+              send({
+                type: 'net.head.result',
+                requestId: msg.requestId,
+                ok: true,
+                status: res.status,
+                contentType: res.headers.get('content-type') ?? undefined,
+                contentLength: len,
+              });
+            } catch (e: any) {
+              send({
+                type: 'net.head.result',
+                requestId: msg.requestId,
+                ok: false,
+                message: e?.message ?? String(e),
+              });
+            }
+            return;
+          }
           if (msg.type === 'net.fetch') {
             const max = msg.maxBytes ?? 8 * 1024 * 1024; // 8 MB cap
             try {

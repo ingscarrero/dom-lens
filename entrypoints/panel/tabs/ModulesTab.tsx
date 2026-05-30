@@ -1,8 +1,15 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../store';
 import { summarizeModules } from '@/lib/modules/classify';
 import { fetchAndParseSourceMap, formatBytes, topLeaves } from '@/lib/modules/sourcemap';
 import { viewerFor } from '@/lib/modules/viewers';
+import {
+  probeSourcemaps,
+  summarizeProbe,
+  type ProbeProgress,
+  type ProbeRecord,
+} from '@/lib/modules/sourcemapProbe';
+import type { HeadProxy } from '@/lib/modules/fetchProxy';
 import { buildReformatPayload, parseReformatResponse, languageLabel } from '@/lib/modules/reformat';
 import { extractSkeleton, symbolLabel, type Skeleton, type SkeletonSymbol } from '@/lib/modules/skeleton';
 import { buildSymbolSummaryPayload } from '@/lib/modules/summarizeSymbol';
@@ -15,9 +22,15 @@ interface Props {
   fetchText: (url: string) => Promise<string>;
   oneshot: OneshotProxy;
   streamingOneshot: StreamingOneshot;
+  headProbe: HeadProxy;
 }
 
-export default function ModulesTab({ fetchText, oneshot, streamingOneshot }: Props) {
+export default function ModulesTab({
+  fetchText,
+  oneshot,
+  streamingOneshot,
+  headProbe,
+}: Props) {
   const snap = useStore((s) => s.snapshot);
   const [openId, setOpenId] = useState<string | null>(null);
   const [kindFilter, setKindFilter] = useState<string>('all');
@@ -27,6 +40,43 @@ export default function ModulesTab({ fetchText, oneshot, streamingOneshot }: Pro
   const techStack = snap?.techStack;
 
   const summary = useMemo(() => summarizeModules(modules), [modules]);
+
+  // Sourcemap probe state — Map<moduleId, ProbeRecord>.
+  // The probe auto-runs once per snapshot when the tab mounts; subsequent
+  // mounts reuse the same record map. We also keep a progress object so
+  // the summary card can show "Probing 12/45…" while the pool churns.
+  const [probeRecords, setProbeRecords] = useState<Map<string, ProbeRecord>>(new Map());
+  const [probeProgress, setProbeProgress] = useState<ProbeProgress | null>(null);
+  const probedSnapshotRef = useRef<string | null>(null);
+  const probeAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    if (!snap || modules.length === 0) return;
+    if (probedSnapshotRef.current === snap.id) return; // already probed this snapshot
+    probedSnapshotRef.current = snap.id;
+    probeAbortRef.current?.abort();
+    const ctrl = new AbortController();
+    probeAbortRef.current = ctrl;
+    setProbeRecords(new Map());
+    setProbeProgress({ done: 0, total: 0, running: 0, declared: 0, found: 0, missing: 0, skipped: 0 });
+    void probeSourcemaps(modules, headProbe, {
+      concurrency: 4,
+      signal: ctrl.signal,
+      onProgress: (p) => setProbeProgress(p),
+    }).then((recs) => {
+      if (ctrl.signal.aborted) return;
+      setProbeRecords(new Map(recs));
+      setProbeProgress(null);
+    });
+    return () => {
+      ctrl.abort();
+    };
+  }, [snap?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const probeStats = useMemo(
+    () => summarizeProbe(probeRecords, modules.length),
+    [probeRecords, modules.length],
+  );
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -65,6 +115,54 @@ export default function ModulesTab({ fetchText, oneshot, streamingOneshot }: Pro
               <span className="text-white">{kind}</span> {v!.count}/{formatBytes(v!.bytes)}
             </span>
           ))}
+        </div>
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
+          <span className="text-panel-muted">Sourcemaps:</span>
+          {probeProgress ? (
+            <span className="text-panel-muted">
+              probing {probeProgress.done}/{probeProgress.total} ·{' '}
+              {probeProgress.found + probeProgress.declared} found,{' '}
+              {probeProgress.missing} missing
+            </span>
+          ) : (
+            <>
+              {probeStats.declared > 0 && (
+                <span
+                  className="rounded border border-emerald-500/50 bg-emerald-500/10 px-1.5 py-0.5 text-emerald-200"
+                  title="Page sent a SourceMap response header for these modules — sourcemap location declared by the build."
+                >
+                  ✓ {probeStats.declared} declared
+                </span>
+              )}
+              {probeStats.found > 0 && (
+                <span
+                  className="rounded border border-sky-500/50 bg-sky-500/10 px-1.5 py-0.5 text-sky-200"
+                  title="Probed <url>.map sibling and got 2xx — the sourcemap is hosted alongside the asset."
+                >
+                  ✓ {probeStats.found} found
+                </span>
+              )}
+              {probeStats.missing > 0 && (
+                <span
+                  className="rounded border border-amber-500/50 bg-amber-500/10 px-1.5 py-0.5 text-amber-200"
+                  title="Probe returned 404 — no sibling .map file. The build did not publish sourcemaps for these modules."
+                >
+                  ✗ {probeStats.missing} missing
+                </span>
+              )}
+              {probeStats.skipped > 0 && (
+                <span
+                  className="rounded border border-panel-border bg-panel-bg/40 px-1.5 py-0.5 text-panel-muted"
+                  title="Module kind doesn't have sourcemaps (images, fonts, wasm, etc.)."
+                >
+                  — {probeStats.skipped} N/A
+                </span>
+              )}
+              <span className="ml-1 text-panel-muted">
+                ({probeStats.available} of {modules.length - probeStats.skipped} JS/CSS available)
+              </span>
+            </>
+          )}
         </div>
         {techStack && techStack.matches.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-1.5 text-[11px]">
@@ -157,7 +255,9 @@ export default function ModulesTab({ fetchText, oneshot, streamingOneshot }: Pro
                     <td className="px-2 py-1 text-right font-mono">
                       {formatBytes(m.transferredBytes)}
                     </td>
-                    <td className="px-2 py-1 text-[10px] text-panel-muted">{spec.label}</td>
+                    <td className="px-2 py-1 text-[10px]">
+                      <SourceMapBadge record={probeRecords.get(m.id)} kindLabel={spec.label} />
+                    </td>
                   </tr>
                   {isOpen && (
                     <tr key={m.id + ':detail'} className="border-b border-panel-border/40 bg-panel-surface/20">
@@ -167,6 +267,7 @@ export default function ModulesTab({ fetchText, oneshot, streamingOneshot }: Pro
                           fetchText={fetchText}
                           oneshot={oneshot}
                           streamingOneshot={streamingOneshot}
+                          probeRecord={probeRecords.get(m.id)}
                         />
                       </td>
                     </tr>
@@ -195,11 +296,13 @@ function ModuleDetail({
   fetchText,
   oneshot,
   streamingOneshot,
+  probeRecord,
 }: {
   module: LoadedModule;
   fetchText: (url: string) => Promise<string>;
   oneshot: OneshotProxy;
   streamingOneshot: StreamingOneshot;
+  probeRecord: ProbeRecord | undefined;
 }) {
   const spec = viewerFor(module.classification.chunkKind);
   switch (spec.family) {
@@ -211,6 +314,7 @@ function ModuleDetail({
           fetchText={fetchText}
           oneshot={oneshot}
           streamingOneshot={streamingOneshot}
+          probeRecord={probeRecord}
         />
       );
     case 'data':
@@ -266,11 +370,13 @@ function CodeModuleDetail({
   fetchText,
   oneshot,
   streamingOneshot,
+  probeRecord,
 }: {
   module: LoadedModule;
   fetchText: (url: string) => Promise<string>;
   oneshot: OneshotProxy;
   streamingOneshot: StreamingOneshot;
+  probeRecord: ProbeRecord | undefined;
 }) {
   const settings = useStore((s) => s.settings);
   const spec = viewerFor(module.classification.chunkKind);
@@ -284,6 +390,18 @@ function CodeModuleDetail({
 
   useEffect(() => {
     let cancelled = false;
+    // Short-circuit when the probe already determined the sourcemap is
+    // missing — skip the slow fetch + sourceMappingURL parse and jump
+    // straight to the "Map module" UX. Same for declared/found which
+    // are positive signals: we still need to fetch, but at least we know
+    // it'll succeed.
+    if (probeRecord?.status === 'missing') {
+      setState({
+        phase: 'no-map',
+        reason: `HEAD probe returned ${probeRecord.httpStatus ?? '4xx'} for ${probeRecord.mapUrl ?? '.map sibling'}`,
+      });
+      return;
+    }
     setState({ phase: 'fetching-map' });
     fetchAndParseSourceMap(module, fetchText)
       .then((map) => {
@@ -299,7 +417,7 @@ function CodeModuleDetail({
     return () => {
       cancelled = true;
     };
-  }, [module.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [module.id, probeRecord?.status]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const runMapModule = async () => {
     setState({ phase: 'mapping', progress: 'Fetching source…' });
@@ -975,6 +1093,83 @@ function TreeView({ root }: { root: SourceFileNode }) {
   };
 
   return <div className="mt-2 max-h-80 overflow-auto">{render(root, 0)}</div>;
+}
+
+/**
+ * Small status pill rendered in the rightmost column of the modules table.
+ * Reflects the probe pass result for this module. Two tiers: a colour code
+ * (good / pending / bad / neutral) and a 1-word label.
+ */
+function SourceMapBadge({
+  record,
+  kindLabel,
+}: {
+  record: ProbeRecord | undefined;
+  kindLabel: string;
+}) {
+  if (!record) {
+    return <span className="text-panel-muted">{kindLabel}</span>;
+  }
+  const cls = (color: 'good' | 'pending' | 'bad' | 'neutral') => {
+    switch (color) {
+      case 'good':
+        return 'border-emerald-500/50 bg-emerald-500/10 text-emerald-200';
+      case 'pending':
+        return 'border-sky-500/40 bg-sky-500/10 text-sky-200 animate-pulse';
+      case 'bad':
+        return 'border-amber-500/50 bg-amber-500/10 text-amber-200';
+      case 'neutral':
+        return 'border-panel-border text-panel-muted';
+    }
+  };
+  switch (record.status) {
+    case 'declared':
+      return (
+        <span
+          title={`Page declared sourcemap at ${record.mapUrl ?? '<unknown>'}`}
+          className={'rounded border px-1.5 py-0.5 ' + cls('good')}
+        >
+          ✓ declared
+        </span>
+      );
+    case 'found':
+      return (
+        <span
+          title={`HEAD probe on ${record.mapUrl ?? '.map'} returned ${record.httpStatus}`}
+          className={'rounded border px-1.5 py-0.5 ' + cls('good')}
+        >
+          ✓ found
+        </span>
+      );
+    case 'missing':
+      return (
+        <span
+          title={`HEAD probe returned ${record.httpStatus ?? '4xx'} — no .map sibling`}
+          className={'rounded border px-1.5 py-0.5 ' + cls('bad')}
+        >
+          ✗ missing
+        </span>
+      );
+    case 'probing':
+      return (
+        <span className={'rounded border px-1.5 py-0.5 ' + cls('pending')}>
+          probing…
+        </span>
+      );
+    case 'skipped':
+      return <span className="text-panel-muted">{kindLabel}</span>;
+    case 'error':
+      return (
+        <span
+          title={record.message ?? 'probe error'}
+          className={'rounded border px-1.5 py-0.5 ' + cls('bad')}
+        >
+          ! error
+        </span>
+      );
+    default:
+      return <span className="text-panel-muted">?</span>;
+  }
 }
 
 function shorten(path: string): string {

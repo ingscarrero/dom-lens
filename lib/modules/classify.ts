@@ -87,6 +87,20 @@ function classifyEntry(e: HarEntry): LoadedModule | null {
     return null;
   }
   const classification = classifyUrl(e.url, e.mimeType, e.resourceType);
+  // If the page sent a SourceMap response header for this URL, we know a
+  // sourcemap exists without probing or fetching. Resolve the header
+  // value against the module URL so relative paths work.
+  let sourceMapStatus: LoadedModule['sourceMapStatus'] = 'unknown';
+  let sourceMapUrl: string | undefined;
+  if (e.sourceMapHeader) {
+    try {
+      sourceMapUrl = new URL(e.sourceMapHeader, e.url).toString();
+      sourceMapStatus = 'declared';
+    } catch {
+      sourceMapUrl = e.sourceMapHeader;
+      sourceMapStatus = 'declared';
+    }
+  }
   return {
     id: e.url,
     url: e.url,
@@ -99,7 +113,8 @@ function classifyEntry(e: HarEntry): LoadedModule | null {
     timeMs: e.timeMs,
     startedDateTime: e.startedDateTime,
     classification,
-    sourceMapStatus: 'unknown',
+    sourceMapStatus,
+    sourceMapUrl,
   };
 }
 

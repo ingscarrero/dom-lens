@@ -19,6 +19,11 @@ export interface HarEntry {
   timeMs?: number;
   responseSize?: number;
   mimeType?: string;
+  /** Value of the `SourceMap` (or legacy `X-SourceMap`) response header,
+   * captured from devtools.network. When set, the page is explicitly
+   * declaring the sourcemap URL — we don't need to probe or read the
+   * source body to know one exists. */
+  sourceMapHeader?: string;
 }
 
 export interface WebVitals {

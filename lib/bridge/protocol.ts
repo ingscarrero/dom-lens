@@ -7,6 +7,7 @@ export type PanelToBg =
   | { type: 'lm.chat.cancel'; requestId: string }
   | { type: 'lm.test'; baseUrl: string; apiKey?: string }
   | { type: 'net.fetch'; requestId: string; url: string; maxBytes?: number }
+  | { type: 'net.head'; requestId: string; url: string }
   | { type: 'lm.oneshot'; requestId: string; payload: LmChatPayload }
   | { type: 'lm.stream'; requestId: string; payload: LmChatPayload }
   | { type: 'lm.stream.cancel'; requestId: string };
@@ -20,6 +21,8 @@ export type BgToPanel =
   | { type: 'lm.test.result'; ok: boolean; models?: string[]; message?: string }
   | { type: 'net.fetch.result'; requestId: string; ok: true; text: string; status: number; contentType?: string }
   | { type: 'net.fetch.result'; requestId: string; ok: false; message: string }
+  | { type: 'net.head.result'; requestId: string; ok: true; status: number; contentType?: string; contentLength?: number }
+  | { type: 'net.head.result'; requestId: string; ok: false; message: string }
   | { type: 'lm.oneshot.result'; requestId: string; ok: true; text: string }
   | { type: 'lm.oneshot.result'; requestId: string; ok: false; message: string }
   /** Streaming variant of lm.oneshot — same chat round-trip but the SW
