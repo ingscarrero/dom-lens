@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { renderMermaid, diagramId } from '@/lib/diagrams/mermaid';
+import { useLlm } from '@/lib/lm-studio/LlmContext';
+import { useStore } from '@/entrypoints/panel/store';
+import { buildMermaidHealPayload, extractFenced } from './healPrompts';
 
 interface Props {
   source: string;
@@ -30,11 +33,29 @@ interface Props {
  * Falls back to a code block + error message when the final source still
  * doesn't parse.
  */
-export function MermaidBlock({ source, title, raw, debounceMs = 400, streaming }: Props) {
+export function MermaidBlock({ source: incomingSource, title, raw, debounceMs = 400, streaming }: Props) {
   const [svg, setSvg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const renderTokenRef = useRef(0);
+  /** When the user clicks "Heal with AI" and the LLM returns a fixed
+   * diagram, we keep it here as a local override so the block re-renders
+   * the healed version instead of the (broken) prop source. Reset when
+   * the parent passes a different source. */
+  const [healed, setHealed] = useState<string | null>(null);
+  /** Heal call state — null when idle, otherwise streaming or error. */
+  const [healState, setHealState] = useState<
+    { phase: 'streaming'; text: string } | { phase: 'error'; message: string } | null
+  >(null);
+  const llm = useLlm();
+  const settings = useStore((s) => s.settings);
+
+  const source = healed ?? incomingSource;
+  useEffect(() => {
+    // Parent gave us a brand new diagram — drop any locally-healed copy.
+    setHealed(null);
+    setHealState(null);
+  }, [incomingSource]);
 
   // Debounce the source so rapid streaming deltas don't trigger a render
   // storm. While the debounce is in flight the previously rendered SVG
@@ -87,6 +108,38 @@ export function MermaidBlock({ source, title, raw, debounceMs = 400, streaming }
     // the new one renders.
   }, [debouncedSource, raw, streaming]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const canHeal = !!llm && !!settings.baseUrl && !!settings.model && !!error && !raw;
+
+  const heal = () => {
+    if (!llm || !error) return;
+    const payload = buildMermaidHealPayload(source, error, settings);
+    setHealState({ phase: 'streaming', text: '' });
+    let acc = '';
+    const handle = llm(payload, (delta) => {
+      acc += delta;
+      setHealState({ phase: 'streaming', text: acc });
+    });
+    handle.result
+      .then((full) => {
+        const fenced = extractFenced(full, 'mermaid');
+        if (!fenced) {
+          setHealState({
+            phase: 'error',
+            message: 'Model reply did not include a ```mermaid block.',
+          });
+          return;
+        }
+        setHealed(fenced);
+        setHealState(null);
+      })
+      .catch((e) =>
+        setHealState({
+          phase: 'error',
+          message: e instanceof Error ? e.message : String(e),
+        }),
+      );
+  };
+
   if (raw) {
     return (
       <pre className="overflow-x-auto rounded bg-slate-900/60 p-3 text-xs">
@@ -106,7 +159,13 @@ export function MermaidBlock({ source, title, raw, debounceMs = 400, streaming }
         </figcaption>
       )}
       {error && !svg ? (
-        <ErrorBox error={error} source={source} />
+        <ErrorBox
+          error={error}
+          source={source}
+          canHeal={canHeal}
+          onHeal={heal}
+          healState={healState}
+        />
       ) : svg ? (
         <div
           className="overflow-auto"
@@ -131,12 +190,56 @@ export function MermaidBlock({ source, title, raw, debounceMs = 400, streaming }
   );
 }
 
-function ErrorBox({ error, source }: { error: string; source: string }) {
+function ErrorBox({
+  error,
+  source,
+  canHeal,
+  onHeal,
+  healState,
+}: {
+  error: string;
+  source: string;
+  canHeal: boolean;
+  onHeal: () => void;
+  healState:
+    | { phase: 'streaming'; text: string }
+    | { phase: 'error'; message: string }
+    | null;
+}) {
+  const isHealing = healState?.phase === 'streaming';
   return (
     <div className="space-y-2">
-      <div className="rounded border border-red-500/40 bg-red-500/10 px-2 py-1 text-xs text-red-200">
-        Mermaid error: {error}
+      <div className="flex items-start justify-between gap-2 rounded border border-red-500/40 bg-red-500/10 px-2 py-1 text-xs text-red-200">
+        <div className="min-w-0 flex-1">
+          <span className="font-semibold">Mermaid error:</span> {error}
+        </div>
+        {canHeal && (
+          <button
+            type="button"
+            onClick={onHeal}
+            disabled={isHealing}
+            className="shrink-0 rounded border border-panel-accent/60 bg-panel-accent/15 px-2 py-0.5 text-[10px] font-medium text-panel-accent hover:bg-panel-accent/25 disabled:cursor-not-allowed disabled:opacity-50"
+            title="Send the broken source + parser error back to the LLM for a fix"
+          >
+            {isHealing ? 'Healing…' : '✨ Heal with AI'}
+          </button>
+        )}
       </div>
+      {healState?.phase === 'error' && (
+        <div className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-200">
+          Heal failed: {healState.message}
+        </div>
+      )}
+      {isHealing && (
+        <div className="rounded border border-sky-500/30 bg-sky-500/5 px-2 py-1 text-[10px] text-sky-200">
+          <div className="mb-0.5 uppercase tracking-wide text-sky-300/80">
+            Asking model… {healState.text.length} chars received
+          </div>
+          <div className="max-h-24 overflow-auto whitespace-pre-wrap font-mono text-[10px] text-sky-100/80">
+            {healState.text.slice(-300) || '…'}
+          </div>
+        </div>
+      )}
       <pre className="overflow-x-auto rounded bg-slate-900/60 p-2 text-[11px]">
         <code>{source}</code>
       </pre>

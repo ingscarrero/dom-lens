@@ -17,6 +17,7 @@ import { callClearHighlight, callHighlight } from './hooks/useInspectedEval';
 import { createFetchProxy, createHeadProxy } from '@/lib/modules/fetchProxy';
 import { createOneshotProxy } from '@/lib/lm-studio/oneshotProxy';
 import { createStreamingProxy, type StreamHandlers } from '@/lib/lm-studio/streamingProxy';
+import { LlmProvider } from '@/lib/lm-studio/LlmContext';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'snapshot', label: 'Snapshot' },
@@ -223,11 +224,12 @@ export default function App() {
   };
 
   return (
+    <LlmProvider value={streamingOneshot}>
     <div className="flex h-full flex-col bg-panel-bg text-panel-text">
       <header className="flex items-center justify-between border-b border-panel-border bg-panel-surface px-3 py-2">
         <div className="flex items-center gap-2">
           <span className="text-sm font-semibold">DOM Lens</span>
-          <span className="text-xs text-panel-muted">v0.3.17</span>
+          <span className="text-xs text-panel-muted">v0.3.18</span>
         </div>
         <div className="flex items-center gap-2">
           {capturing && captureProgress && (
@@ -325,5 +327,6 @@ export default function App() {
         )}
       </main>
     </div>
+    </LlmProvider>
   );
 }
