@@ -53,17 +53,17 @@ emits real `.map` siblings for every chunk and adds the
 Modules-tab probe pass should show ✓ green badges for all the JS
 modules.
 
-To test the **opposite** case (no sourcemaps — the "production
-build that didn't publish maps" scenario), restart with the env
-var set:
+Three modes:
 
-```bash
-SOURCEMAPS=0 pnpm dev
-```
+| Command | webpack `devtool` | Effect in DOM Lens |
+|---|---|---|
+| `pnpm dev` | `'source-map'` | Probe → ✓ found. Sourcemap content embedded. **📦 Sourcemap** is the default Source mode in FileDetail. |
+| `NOSOURCES=1 pnpm dev` | `'nosources-source-map'` | Probe → ✓ found. **No** `sourcesContent` in the .map. FileDetail auto-defaults to **🐙 GitHub** and pulls source from the linked repo via `raw.githubusercontent.com`. This is the production scenario the GitHub mapping was built for. |
+| `SOURCEMAPS=0 pnpm dev` | `false` | Probe → ✗ missing. The detail view falls back to the regex-based `🗺 Map module` skeleton extractor. |
 
-The Modules tab will then show ✗ missing for every JS module, the
-detail view falls back to the `🗺 Map module` skeleton extractor,
-and per-symbol `✨ Summarize symbol` becomes the navigation path.
+`NOSOURCES=1` requires the GitHub mappings to be configured (see
+the next section) — otherwise the file viewer shows a "no content
+embedded" notice with a hint.
 
 ## Validate with DOM Lens
 

@@ -3,14 +3,21 @@ const HtmlWebpackPlugin = require('html-webpack-plugin');
 const { ModuleFederationPlugin } = require('webpack').container;
 const deps = require('./package.json').dependencies;
 
-// Emit real .map siblings by default so the host doubles as a positive
-// demo case for the DOM Lens sourcemap probe. Set SOURCEMAPS=0 to test
-// the "no sourcemap" path (probe → missing → Map module fallback).
+// Sourcemap-emission knobs for DOM Lens demos:
+//   default     → devtool: 'source-map'        (.map + embedded sourcesContent)
+//   NOSOURCES=1 → devtool: 'nosources-source-map' (.map without sourcesContent
+//                                                  — the production case where
+//                                                  the GitHub-source-fetch path
+//                                                  is the only way to see source)
+//   SOURCEMAPS=0 → devtool: false              (no .map at all — probe shows
+//                                                "missing", Map module fallback)
 const sourcemapsOn = process.env.SOURCEMAPS !== '0';
+const noSources = process.env.NOSOURCES === '1';
+const devtool = !sourcemapsOn ? false : noSources ? 'nosources-source-map' : 'source-map';
 
 module.exports = {
   entry: './src/index.js',
-  devtool: sourcemapsOn ? 'source-map' : false,
+  devtool,
   output: {
     path: path.resolve(__dirname, 'dist'),
     publicPath: 'auto',
