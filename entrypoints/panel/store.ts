@@ -4,6 +4,11 @@ import type { Settings } from '@/lib/storage/settings';
 import type { Tile } from '@/lib/snapshot/slicer';
 import type { RawTile } from '@/lib/snapshot/fullPage';
 import { DEFAULT_SETTINGS } from '@/lib/storage/settings';
+import {
+  addMemoryEntry,
+  removeMemoryEntry,
+  type MemoryEntry,
+} from '@/lib/memory/sessionMemory';
 
 export type Tab =
   | 'snapshot'
@@ -63,6 +68,10 @@ interface State {
   enhanceStatus: 'idle' | 'asking' | 'restitching' | 'done' | 'error';
   enhanceError: string | null;
   enhanceMessage: string | null;
+  /** Per-page session memory. Keyed by pageKey (origin+pathname).
+   * Lets the user accumulate insights across analyses on the same
+   * page and fold them back into later prompts. In-memory only. */
+  memoryByPage: Record<string, MemoryEntry[]>;
 }
 
 interface Actions {
@@ -92,6 +101,11 @@ interface Actions {
   ): void;
   /** Replace just the screenshot on the current snapshot (used after restitch). */
   setSnapshotScreenshot(sc: Snapshot['screenshot']): void;
+  /** Push a new entry onto the page's memory. The slice handles
+   * truncation + oldest-first eviction to stay under MAX_TOTAL_BYTES. */
+  addMemoryEntry(pageKey: string, entry: Omit<MemoryEntry, 'id' | 'timestamp'>): void;
+  removeMemoryEntry(pageKey: string, entryId: string): void;
+  clearMemory(pageKey: string): void;
 }
 
 export const useStore = create<State & Actions>((set) => ({
@@ -115,6 +129,7 @@ export const useStore = create<State & Actions>((set) => ({
   enhanceStatus: 'idle',
   enhanceError: null,
   enhanceMessage: null,
+  memoryByPage: {},
   setTab: (t) => set({ tab: t }),
   setCapturing: (v) =>
     set({ capturing: v, captureError: v ? null : undefined, captureProgress: v ? null : null }),
@@ -181,4 +196,22 @@ export const useStore = create<State & Actions>((set) => ({
     }),
   setSnapshotScreenshot: (sc) =>
     set((s) => (s.snapshot ? { snapshot: { ...s.snapshot, screenshot: sc } } : {})),
+  addMemoryEntry: (pageKey, entry) =>
+    set((s) => ({
+      memoryByPage: {
+        ...s.memoryByPage,
+        [pageKey]: addMemoryEntry(s.memoryByPage[pageKey] ?? [], entry),
+      },
+    })),
+  removeMemoryEntry: (pageKey, entryId) =>
+    set((s) => ({
+      memoryByPage: {
+        ...s.memoryByPage,
+        [pageKey]: removeMemoryEntry(s.memoryByPage[pageKey] ?? [], entryId),
+      },
+    })),
+  clearMemory: (pageKey) =>
+    set((s) => ({
+      memoryByPage: { ...s.memoryByPage, [pageKey]: [] },
+    })),
 }));

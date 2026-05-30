@@ -1,6 +1,7 @@
 import type { LmChatPayload, ContentPart } from '@/lib/bridge/protocol';
 import type { Settings } from '@/lib/storage/settings';
 import { MERMAID_RULES, ARTIFACT_RULES } from '@/lib/llm/rules';
+import { formatMemoryForPrompt, type MemoryEntry } from '@/lib/memory/sessionMemory';
 
 /**
  * UX-vision prompts for the Components tab.
@@ -320,6 +321,11 @@ export function buildUxVisionPayload(
     componentPath?: string;
     boundsLabel?: string;
     domContext?: UxDomContext | null;
+    /** Per-page memory entries to fold into the user message. When
+     * non-empty a `## Memory from prior analyses` block is added at
+     * the top of the user message so the model treats earlier
+     * insights as background context. */
+    memoryEntries?: readonly MemoryEntry[];
   },
   preset: UxPreset | { id: string; customPrompt: string },
   settings: Settings,
@@ -336,6 +342,12 @@ export function buildUxVisionPayload(
   if (args.boundsLabel) contextLines.push(`Visible region: ${args.boundsLabel}`);
 
   const sections: string[] = [];
+  // Memory goes FIRST so subsequent sections (the actual question /
+  // DOM context / image) are interpreted with the memory already
+  // established as background.
+  if (args.memoryEntries && args.memoryEntries.length > 0) {
+    sections.push(formatMemoryForPrompt(args.memoryEntries));
+  }
   if (isCustom) {
     sections.push(`Question: ${preset.customPrompt.trim()}`);
   } else {
@@ -430,8 +442,15 @@ export function describeInputs(args: {
   componentName?: string;
   componentKind?: string;
   boundsLabel?: string;
+  memoryEntries?: readonly MemoryEntry[];
 }): string[] {
   const out: string[] = [];
+  if (args.memoryEntries && args.memoryEntries.length > 0) {
+    const bytes = args.memoryEntries.reduce((s, e) => s + e.text.length, 0);
+    out.push(
+      `📚 Memory: ${args.memoryEntries.length} entr${args.memoryEntries.length === 1 ? 'y' : 'ies'} included (~${Math.round(bytes / 1024)} KB)`,
+    );
+  }
   if (args.componentName) {
     out.push(
       `Selected component: \`${args.componentName}\`${args.componentKind ? ` (${args.componentKind})` : ''}`,

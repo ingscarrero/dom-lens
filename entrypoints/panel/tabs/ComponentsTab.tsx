@@ -19,6 +19,11 @@ import {
 import { useLlm } from '@/lib/lm-studio/LlmContext';
 import { Tabs, type TabItem } from '@/lib/ui/Tabs';
 import { MarkdownRenderer } from '@/lib/ui/MarkdownRenderer';
+import {
+  pageKey,
+  memoryStats,
+  type MemoryEntry,
+} from '@/lib/memory/sessionMemory';
 
 interface TreeRow {
   id: string;
@@ -167,6 +172,16 @@ export default function ComponentsTab() {
   const llm = useLlm();
   const settings = useStore((s) => s.settings);
   const llmConfigured = !!settings.baseUrl && !!settings.model;
+  // Session memory for this page (origin + pathname keyed).
+  const memoryByPage = useStore((s) => s.memoryByPage);
+  const addMemory = useStore((s) => s.addMemoryEntry);
+  const removeMemory = useStore((s) => s.removeMemoryEntry);
+  const clearMemory = useStore((s) => s.clearMemory);
+  const pk = pageKey(snap?.url);
+  const memoryEntries = memoryByPage[pk] ?? [];
+  const memStats = memoryStats(memoryEntries);
+  const [includeMemory, setIncludeMemory] = useState(true);
+  const [memoryOpen, setMemoryOpen] = useState(false);
   // UX-vision analysis state: each run lands in a tab; same id replaces.
   const [analyses, setAnalyses] = useState<
     Record<
@@ -187,6 +202,10 @@ export default function ComponentsTab() {
         domContext?: InspectedRegion | null;
         /** Human-readable bullets of what was sent. */
         inputs?: string[];
+        /** Preset / source id used for memory labelling. */
+        sourceId?: string;
+        componentName?: string;
+        componentKind?: string;
       }
     >
   >({});
@@ -251,6 +270,8 @@ export default function ComponentsTab() {
     const imgDims = await measureDataUrl(imageDataUrl);
     const imageBytes = approxDataUrlBytes(imageDataUrl);
 
+    const memoryToInclude = includeMemory ? memoryEntries : [];
+
     const inputs = describeInputs({
       imageBytes,
       imageDims: imgDims ?? undefined,
@@ -258,6 +279,7 @@ export default function ComponentsTab() {
       componentName: selected.name,
       componentKind: selected.kind,
       boundsLabel,
+      memoryEntries: memoryToInclude,
     });
 
     const payload = buildUxVisionPayload(
@@ -274,6 +296,7 @@ export default function ComponentsTab() {
               sheetsBlocked: domContext.sheetsBlocked,
             }
           : null,
+        memoryEntries: memoryToInclude,
       },
       isCustom
         ? { id: preset.id, customPrompt: preset.customPrompt }
@@ -293,6 +316,9 @@ export default function ComponentsTab() {
         imageBytes,
         domContext,
         inputs,
+        sourceId: tabId,
+        componentName: selected.name,
+        componentKind: selected.kind,
       },
     }));
 
@@ -437,7 +463,14 @@ export default function ComponentsTab() {
           if (activeTab === id) setActiveTab('tree');
         }}
       >
-        {!treeActive && <UxAnalysisPane result={analyses[activeTab]} />}
+        {!treeActive && (
+          <UxAnalysisPane
+            result={analyses[activeTab]}
+            tabId={activeTab}
+            inMemory={memoryEntries.some((m) => m.sourceId === activeTab)}
+            onSaveToMemory={(entry) => addMemory(pk, entry)}
+          />
+        )}
         <div
           style={{ display: treeActive ? 'flex' : 'none' }}
           className="h-full flex-col"
@@ -611,6 +644,94 @@ export default function ComponentsTab() {
                     </div>
                   ) : (
                     <>
+                      <div className="mb-2 rounded border border-panel-border bg-black/30 px-1.5 py-1 text-[10px]">
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="text-panel-text/90">
+                            📚 Memory:{' '}
+                            <span className={memStats.count > 0 ? 'text-white' : 'text-panel-muted'}>
+                              {memStats.count} entr{memStats.count === 1 ? 'y' : 'ies'}
+                            </span>
+                            {memStats.count > 0 && (
+                              <span className="text-panel-muted">
+                                {' '}
+                                · {(memStats.bytes / 1024).toFixed(1)} KB
+                              </span>
+                            )}
+                          </span>
+                          <div className="flex items-center gap-1">
+                            <label className="flex cursor-pointer items-center gap-1 text-panel-muted">
+                              <input
+                                type="checkbox"
+                                checked={includeMemory}
+                                onChange={(e) => setIncludeMemory(e.target.checked)}
+                                disabled={memStats.count === 0}
+                                className="h-3 w-3"
+                              />
+                              <span>Include</span>
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => setMemoryOpen((v) => !v)}
+                              disabled={memStats.count === 0}
+                              className="rounded border border-panel-border px-1 text-panel-muted hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              {memoryOpen ? 'hide' : 'view'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => clearMemory(pk)}
+                              disabled={memStats.count === 0}
+                              className="rounded border border-panel-border px-1 text-panel-muted hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              clear
+                            </button>
+                          </div>
+                        </div>
+                        {memStats.count > 0 && (
+                          <div className="mt-1 h-0.5 w-full overflow-hidden rounded-full bg-slate-800">
+                            <div
+                              className="h-full bg-panel-accent/60"
+                              style={{
+                                width:
+                                  Math.min(100, (memStats.bytes / memStats.budget) * 100) + '%',
+                              }}
+                            />
+                          </div>
+                        )}
+                        {memoryOpen && memStats.count > 0 && (
+                          <ul className="mt-1.5 space-y-1 border-t border-panel-border pt-1.5">
+                            {memoryEntries.map((m) => (
+                              <li
+                                key={m.id}
+                                className="flex items-start justify-between gap-2 rounded bg-black/30 px-1.5 py-1"
+                              >
+                                <div className="min-w-0 flex-1">
+                                  <div className="text-[10px] font-medium text-white">
+                                    {m.icon} {m.label}
+                                  </div>
+                                  {m.componentName && (
+                                    <div className="text-[10px] text-panel-muted">
+                                      {m.componentName}
+                                      {m.componentKind ? ` · ${m.componentKind}` : ''}
+                                    </div>
+                                  )}
+                                  <div className="text-[10px] text-panel-muted">
+                                    {(m.text.length / 1024).toFixed(1)} KB
+                                  </div>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => removeMemory(pk, m.id)}
+                                  title="Remove entry"
+                                  className="shrink-0 rounded border border-panel-border px-1 text-[10px] text-panel-muted hover:text-red-300"
+                                >
+                                  ✕
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
                       <div className="grid grid-cols-1 gap-1">
                         {UX_PRESETS.map((p) => (
                           <button
@@ -694,6 +815,9 @@ export default function ComponentsTab() {
 
 function UxAnalysisPane({
   result,
+  tabId,
+  inMemory,
+  onSaveToMemory,
 }: {
   result:
     | {
@@ -706,8 +830,14 @@ function UxAnalysisPane({
         imageDims?: { w: number; h: number };
         imageBytes?: number;
         inputs?: string[];
+        sourceId?: string;
+        componentName?: string;
+        componentKind?: string;
       }
     | undefined;
+  tabId?: string;
+  inMemory?: boolean;
+  onSaveToMemory?: (entry: Omit<MemoryEntry, 'id' | 'timestamp'>) => void;
 }) {
   if (!result) {
     return (
@@ -723,13 +853,43 @@ function UxAnalysisPane({
           <span className="mr-1">{result.icon}</span>
           {result.label}
         </span>
-        <span>
-          {result.state === 'streaming'
-            ? '· streaming'
-            : result.state === 'error'
-              ? '· error'
-              : '· done'}
-        </span>
+        <div className="flex items-center gap-2 normal-case">
+          {result.state === 'done' && result.text && onSaveToMemory && (
+            inMemory ? (
+              <span
+                title="This analysis is in this page's session memory"
+                className="rounded border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-200"
+              >
+                📚 In memory
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={() =>
+                  onSaveToMemory({
+                    label: result.label,
+                    sourceId: tabId,
+                    icon: result.icon,
+                    componentName: result.componentName,
+                    componentKind: result.componentKind,
+                    text: result.text,
+                  })
+                }
+                title="Save this analysis to the page's session memory so later prompts can fold it in"
+                className="rounded border border-panel-accent/60 bg-panel-accent/10 px-1.5 py-0.5 text-[10px] font-medium text-panel-accent hover:bg-panel-accent/20"
+              >
+                💾 Save to memory
+              </button>
+            )
+          )}
+          <span className="text-panel-muted">
+            {result.state === 'streaming'
+              ? '· streaming'
+              : result.state === 'error'
+                ? '· error'
+                : '· done'}
+          </span>
+        </div>
       </div>
       <div className="scrollbar-thin min-h-0 flex-1 overflow-auto p-3 text-[12px]">
         {(result.imageDataUrl || (result.inputs && result.inputs.length > 0)) && (
