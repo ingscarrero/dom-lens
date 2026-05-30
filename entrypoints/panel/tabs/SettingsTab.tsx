@@ -221,9 +221,9 @@ function GithubMappingsEditor({
   mappings: GithubMapping[];
   onChange(next: GithubMapping[]): void;
 }) {
-  const [draft, setDraft] = useState<Partial<GithubMapping> & { repoInput?: string }>({
-    branch: 'main',
-  });
+  const [draft, setDraft] = useState<
+    Partial<GithubMapping> & { repoInput?: string }
+  >({ branch: 'main' });
   const [error, setError] = useState<string | null>(null);
 
   const inputCls =
@@ -236,6 +236,26 @@ function GithubMappingsEditor({
     if (!label) return setError('Label is required.');
     if (!urlPattern) return setError('URL pattern is required.');
     if (!parsed) return setError('Repository is required (owner/repo or full GitHub URL).');
+    // Validate version-capture regex early so the user gets a useful
+    // error instead of a silent fallback at resolution time.
+    const versionCapture = draft.versionCapture?.trim() || undefined;
+    if (versionCapture) {
+      try {
+        new RegExp(versionCapture);
+      } catch (e) {
+        return setError(
+          'Version capture regex is invalid: ' + (e instanceof Error ? e.message : String(e)),
+        );
+      }
+      if (!/\([^?][^)]*\)/.test(versionCapture)) {
+        // Note: this check is rough — `(?:` is non-capturing so doesn't
+        // count. Anything else with parens that isn't an inline flag
+        // group is captured. Just warn.
+        return setError(
+          'Version capture must include a capture group, e.g. /v([0-9.]+)/',
+        );
+      }
+    }
     const next: GithubMapping = {
       id: 'gh-' + Date.now().toString(36),
       label,
@@ -244,6 +264,7 @@ function GithubMappingsEditor({
       repo: parsed.repo,
       branch: (draft.branch?.trim() || parsed.branch || 'main') || 'main',
       basePath: (draft.basePath?.trim() || parsed.basePath || undefined) ?? undefined,
+      versionCapture,
     };
     onChange([...mappings, next]);
     setDraft({ branch: 'main' });
@@ -279,6 +300,11 @@ function GithubMappingsEditor({
                     {m.basePath ? `/${m.basePath}` : ''}
                   </span>
                 </div>
+                {m.versionCapture && (
+                  <div className="text-[10px] text-panel-muted">
+                    version: <span className="font-mono">{m.versionCapture}</span>
+                  </div>
+                )}
               </div>
               <button
                 type="button"
@@ -341,6 +367,24 @@ function GithubMappingsEditor({
               onChange={(e) => setDraft((d) => ({ ...d, basePath: e.target.value }))}
               placeholder="host"
             />
+          </label>
+          <label className="col-span-2 block">
+            <span className="text-panel-muted">
+              Version capture (optional regex against module URL)
+            </span>
+            <input
+              className={inputCls}
+              value={draft.versionCapture ?? ''}
+              onChange={(e) =>
+                setDraft((d) => ({ ...d, versionCapture: e.target.value }))
+              }
+              placeholder="/v([0-9.]+)/"
+            />
+            <span className="text-[10px] text-panel-muted">
+              Group 1 fills <code>{'{version}'}</code> in the Branch field. Use e.g.
+              branch <code>v{'{version}'}</code> + capture <code>{'/v([0-9.]+)/'}</code> for
+              CDN URLs like <code>cdn.example.com/v1.2.3/app.js</code>.
+            </span>
           </label>
         </div>
         {error && <div className="mt-2 text-[10px] text-red-300">{error}</div>}

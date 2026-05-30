@@ -31,13 +31,15 @@ function useGithubLink(
   parentModuleUrl: string | undefined,
   sourcePath: string | undefined,
   mappings: readonly GithubMapping[],
-): { webUrl: string; rawUrl: string; mapping: GithubMapping } | null {
+): { webUrl: string; rawUrl: string; mapping: GithubMapping; branch: string } | null {
   if (!parentModuleUrl || !sourcePath) return null;
   const mapping = findMappingForModule(parentModuleUrl, mappings);
   if (!mapping) return null;
-  const urls = resolveGithubFileUrl(sourcePath, mapping);
+  // Pass parentModuleUrl so {version} placeholders in the branch get
+  // substituted (e.g. CDN paths like /v1.2.3/main.js → tag v1.2.3).
+  const urls = resolveGithubFileUrl(sourcePath, mapping, parentModuleUrl);
   if (!urls) return null;
-  return { webUrl: urls.webUrl, rawUrl: urls.rawUrl, mapping };
+  return { webUrl: urls.webUrl, rawUrl: urls.rawUrl, mapping, branch: urls.branch };
 }
 
 /**

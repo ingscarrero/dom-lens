@@ -36,12 +36,21 @@ export interface GithubMapping {
   owner: string;
   /** Repository name. */
   repo: string;
-  /** Branch (or tag, or commit SHA — anything the GitHub URL accepts). */
+  /** Branch / tag / commit. Anything the GitHub URL accepts. Supports
+   * a `{version}` placeholder that gets substituted when `versionCapture`
+   * matches the module URL — e.g. `v{version}` + capture `/v([0-9.]+)/`
+   * → `v1.2.3` for CDN URLs like `cdn.example.com/v1.2.3/main.js`. */
   branch: string;
   /** Optional prefix to prepend to the file path inside the repo. Useful
    * for monorepos where the deployed bundle was built from a subdir
    * (e.g. `host` for our `examples/mf-demo/host`). */
   basePath?: string;
+  /** Optional regex (as a string) applied to the deployed module URL.
+   * Capture group 1 fills `{version}` in the branch template. When set
+   * but the regex doesn't match or fails to compile, we fall back to
+   * the literal branch with `{version}` left as-is — the URL will be
+   * obviously broken, which surfaces the misconfiguration. */
+  versionCapture?: string;
 }
 
 /**
@@ -60,51 +69,103 @@ export function findMappingForModule(
 
 /**
  * Strip the bundler-specific virtual prefix from a sourcemap `sources`
- * entry so we can append it to a GitHub URL. Handles:
- *   - `webpack:///./src/App.jsx` → `src/App.jsx`
- *   - `webpack:///src/App.jsx`   → `src/App.jsx`
- *   - `vite:///./src/App.tsx`    → `src/App.tsx`
- *   - `../src/foo.js`            → `src/foo.js`
- *   - `node_modules/x`           → null (skip — not in the user's repo)
+ * entry so we can append it to a GitHub URL. Handles all common
+ * webpack 5 / vite / rollup / esbuild emission formats:
+ *
+ *   - `webpack:///./src/App.jsx`             → `src/App.jsx`  (triple-slash, leading ./)
+ *   - `webpack:///src/App.jsx`               → `src/App.jsx`  (triple-slash, no ./)
+ *   - `webpack://mf-host/src/App.jsx`        → `src/App.jsx`  (double-slash, namespace = output.uniqueName)
+ *   - `webpack://mf-host/./src/App.jsx`      → `src/App.jsx`  (namespace + leading ./)
+ *   - `webpack-internal:///./node_modules/…` → null (filtered)
+ *   - `vite:///src/App.tsx`                  → `src/App.tsx`
+ *   - `vite://my-app/src/App.tsx`            → `src/App.tsx`
+ *   - `../src/foo.js`                        → `src/foo.js`
+ *   - `node_modules/x`                       → null (skip — not in the user's repo)
+ *
+ * Why the namespace handling matters: webpack 5's *default*
+ * `devtoolModuleFilenameTemplate` is `webpack://[namespace]/[resource]`
+ * where `[namespace]` is `output.uniqueName` (defaults to
+ * `package.json#name`). So most real-world bundles emit
+ * `webpack://mf-host/...`, not the triple-slash variant. Earlier
+ * versions of this normaliser only handled the triple-slash case and
+ * silently mangled the namespace into the path.
  *
  * Returns `null` if the path is clearly NOT something we can locate in
- * a single source repo (cross-origin markers, node_modules entries).
+ * a single source repo (cross-origin markers, node_modules entries,
+ * webpack runtime helpers).
  */
 export function normalizeSourcePathForGithub(raw: string): string | null {
   if (!raw) return null;
   let s = raw;
 
-  const prefixes = [
-    'webpack-internal:///',
-    'webpack:///',
-    'vite:///',
-    'rollup:///',
-  ];
-  for (const p of prefixes) {
-    if (s.startsWith(p)) {
-      s = s.slice(p.length);
+  // Strip bundler scheme + optional namespace. Order matters: try the
+  // triple-slash form FIRST (no namespace) so we don't accidentally
+  // gobble the first path segment as if it were the namespace.
+  const schemes = ['webpack-internal', 'webpack', 'vite', 'rollup'];
+  for (const scheme of schemes) {
+    const tripleRe = new RegExp(`^${scheme}:\\/{3,}`);
+    if (tripleRe.test(s)) {
+      s = s.replace(tripleRe, '');
+      break;
+    }
+    const namespacedRe = new RegExp(`^${scheme}:\\/\\/[^\\/]+\\/`);
+    if (namespacedRe.test(s)) {
+      s = s.replace(namespacedRe, '');
       break;
     }
   }
+
   // Cross-origin marker `(host)/...`
   s = s.replace(/^\(([^)]+)\)\//, '');
   // Leading "./" and "../"
   s = s.replace(/^(\.\.\/)+/, '');
   s = s.replace(/^\.\//, '');
+  // Windows-style backslashes
   s = s.replace(/\\/g, '/');
+  // Strip query/fragment
   s = s.replace(/[?#].*$/, '');
+  // Collapse double slashes — safe now that the scheme is gone, so we
+  // won't mangle `://` into `:/` like the previous version did.
   s = s.replace(/\/{2,}/g, '/');
 
   if (!s) return null;
-  // Filter out paths that obviously don't live in the user's repo.
   if (s.includes('node_modules/')) return null;
   if (s.startsWith('webpack/')) return null; // webpack runtime helpers
   return s;
 }
 
 /**
+ * Resolves the effective branch for a mapping, substituting `{version}`
+ * placeholders from the result of `versionCapture` applied to the
+ * deployed module's URL. Returns the literal branch (with `{version}`
+ * unfilled if the regex doesn't match) — the broken URL is intentionally
+ * loud so users notice the misconfiguration.
+ */
+export function resolveBranch(mapping: GithubMapping, moduleUrl?: string): string {
+  const template = mapping.branch || 'main';
+  if (!template.includes('{version}')) return template;
+  if (!moduleUrl || !mapping.versionCapture) return template;
+  try {
+    const re = new RegExp(mapping.versionCapture);
+    const match = moduleUrl.match(re);
+    if (match && match[1]) {
+      return template.replace(/\{version\}/g, match[1]);
+    }
+  } catch {
+    /* invalid regex — fall through */
+  }
+  return template;
+}
+
+/**
  * Resolve a sourcemap path to GitHub URLs (both `raw.githubusercontent.com`
  * for fetching and `github.com/blob` for the human-readable file view).
+ *
+ * `moduleUrl` is optional — when supplied AND the mapping has a
+ * `versionCapture` regex AND the branch contains `{version}`, the
+ * captured group fills the placeholder. This lets a single mapping
+ * track many tagged deployments (CDN URLs like
+ * `cdn.example.com/v1.2.3/main.js` → tag `v1.2.3` on GitHub).
  *
  * Returns `null` when the path can't be mapped (cross-origin marker,
  * node_modules, etc.).
@@ -112,7 +173,8 @@ export function normalizeSourcePathForGithub(raw: string): string | null {
 export function resolveGithubFileUrl(
   sourcePath: string,
   mapping: GithubMapping,
-): { rawUrl: string; webUrl: string; pathInRepo: string } | null {
+  moduleUrl?: string,
+): { rawUrl: string; webUrl: string; pathInRepo: string; branch: string } | null {
   const normalized = normalizeSourcePathForGithub(sourcePath);
   if (!normalized) return null;
   const segments: string[] = [];
@@ -123,22 +185,29 @@ export function resolveGithubFileUrl(
   const pathInRepo = segments.join('/');
   const owner = encodeURIComponent(mapping.owner);
   const repo = encodeURIComponent(mapping.repo);
-  const branch = encodeURIComponent(mapping.branch || 'main');
+  const branchRaw = resolveBranch(mapping, moduleUrl);
+  const branch = encodeURIComponent(branchRaw);
   return {
     rawUrl: `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${pathInRepo}`,
     webUrl: `https://github.com/${owner}/${repo}/blob/${branch}/${pathInRepo}`,
     pathInRepo,
+    branch: branchRaw,
   };
 }
 
 /**
  * Build the canonical repo home URL — used by the ModuleAnalysis "GitHub
- * repository" card.
+ * repository" card. When `moduleUrl` resolves a non-default branch,
+ * we point at /tree/<branch> so the user lands on the right ref.
  */
-export function repoHomeUrl(mapping: GithubMapping): string {
+export function repoHomeUrl(mapping: GithubMapping, moduleUrl?: string): string {
   const owner = encodeURIComponent(mapping.owner);
   const repo = encodeURIComponent(mapping.repo);
-  return `https://github.com/${owner}/${repo}`;
+  const branchRaw = resolveBranch(mapping, moduleUrl);
+  if (!branchRaw || branchRaw === 'main' || branchRaw === 'master') {
+    return `https://github.com/${owner}/${repo}`;
+  }
+  return `https://github.com/${owner}/${repo}/tree/${encodeURIComponent(branchRaw)}`;
 }
 
 /**

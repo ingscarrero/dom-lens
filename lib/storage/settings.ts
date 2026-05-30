@@ -11,8 +11,12 @@ export interface GithubMapping {
   urlPattern: string;
   owner: string;
   repo: string;
+  /** Supports `{version}` placeholder when `versionCapture` is set. */
   branch: string;
   basePath?: string;
+  /** Optional regex (as a string) matched against the deployed module
+   * URL; capture group 1 fills `{version}` in `branch`. */
+  versionCapture?: string;
 }
 
 export interface Settings {
