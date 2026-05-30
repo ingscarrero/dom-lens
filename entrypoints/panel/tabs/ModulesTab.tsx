@@ -43,10 +43,20 @@ export default function ModulesTab({
   const [kindFilter, setKindFilter] = useState<string>('all');
   const [query, setQuery] = useState('');
   const [viewMode, setViewMode] = useState<'tree' | 'flat'>('tree');
-  const [tree, setTree] = useState<ModuleTreeNode | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedFileNode, setSelectedFileNode] = useState<ModuleTreeNode | null>(null);
-  const expandedModulesRef = useRef(new Set<string>());
+  /** Sourcemaps the user has requested expanded under a module node, keyed
+   * by the module's id (URL). Resetting this on snapshot change ensures
+   * stale expansions don't bleed across captures. */
+  const [moduleExpansions, setModuleExpansions] = useState<Map<string, ParsedSourceMap>>(
+    new Map(),
+  );
+  /** Per-module fetch status — surfaced as a small badge next to the
+   * module name so the user can see WHY a click did or didn't expand. */
+  const [moduleFetchState, setModuleFetchState] = useState<Map<string, 'loading' | 'error'>>(
+    new Map(),
+  );
+  const [moduleFetchError, setModuleFetchError] = useState<Map<string, string>>(new Map());
 
   const modules = snap?.modules ?? [];
   const techStack = snap?.techStack;
@@ -90,36 +100,70 @@ export default function ModulesTab({
     [probeRecords, modules.length],
   );
 
-  // Build the deployed-modules tree once per snapshot. Subsequent
-  // sourcemap expansions modify it in-place via setTree(expand(...)).
-  useEffect(() => {
-    if (modules.length === 0) {
-      setTree(null);
-      expandedModulesRef.current.clear();
-      return;
+  // Derive the rendered tree synchronously from (modules + expansions).
+  // Computing in render avoids the post-render `useEffect` gap where the
+  // tab briefly rendered nothing on a fresh capture.
+  const tree = useMemo<ModuleTreeNode | null>(() => {
+    if (modules.length === 0) return null;
+    let t = buildModuleTree(modules);
+    for (const [moduleId, map] of moduleExpansions) {
+      t = expandModuleWithSourcemap(t, moduleId, map);
     }
-    setTree(buildModuleTree(modules));
-    expandedModulesRef.current.clear();
-  }, [snap?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+    return t;
+  }, [modules, moduleExpansions]);
+
+  // Reset expansions + fetch state when the snapshot changes — stale
+  // sourcemaps don't apply to a fresh capture.
+  useEffect(() => {
+    setModuleExpansions(new Map());
+    setModuleFetchState(new Map());
+    setModuleFetchError(new Map());
+    setSelectedFileNode(null);
+    setSelectedNodeId(null);
+  }, [snap?.id]);
 
   // Lazy-fetch the sourcemap for the module node the user just opened in
-  // the tree, then graft its sources subtree under that node. Skipped if
-  // we've already expanded it or the probe said the map is missing.
+  // the tree, then add it to the expansions map so the derived tree picks
+  // it up on the next render. Fetch state is exposed via the tree's
+  // statusForUrl prop so the user gets a "loading…" / error indicator
+  // instead of dead air while the .map is being downloaded.
   const handleExpandModule = async (node: ModuleTreeNode) => {
     if (!node.module) return;
-    if (expandedModulesRef.current.has(node.id)) return;
-    expandedModulesRef.current.add(node.id);
+    if (moduleExpansions.has(node.id)) return; // already loaded
+    if (moduleFetchState.get(node.id) === 'loading') return; // in flight
     const probe = probeRecords.get(node.module.id);
-    if (probe?.status === 'missing' || probe?.status === 'error') return;
+    if (probe?.status === 'missing') {
+      console.info('[DOM Lens] sourcemap missing for', node.module.url, '(probe 4xx)');
+      return;
+    }
+    setModuleFetchState((prev) => new Map(prev).set(node.id, 'loading'));
+    setModuleFetchError((prev) => {
+      const next = new Map(prev);
+      next.delete(node.id);
+      return next;
+    });
     try {
       const map = await fetchAndParseSourceMap(node.module, fetchText);
-      setTree((prev) =>
-        prev ? expandModuleWithSourcemap(prev, node.id, map) : prev,
+      setModuleExpansions((prev) => new Map(prev).set(node.id, map));
+      setModuleFetchState((prev) => {
+        const next = new Map(prev);
+        next.delete(node.id);
+        return next;
+      });
+      console.info(
+        '[DOM Lens] sourcemap loaded for',
+        node.module.url,
+        '·',
+        map.sources.length,
+        'sources,',
+        map.sourcesContent.filter((c) => c !== null).length,
+        'with embedded content',
       );
-    } catch {
-      // Quietly leave the node unexpanded — the user can still see the
-      // deployed module entry. The flat-table view also surfaces the
-      // failure via the Code module detail's "no sourcemap" banner.
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.warn('[DOM Lens] sourcemap fetch failed for', node.module.url, '·', msg);
+      setModuleFetchState((prev) => new Map(prev).set(node.id, 'error'));
+      setModuleFetchError((prev) => new Map(prev).set(node.id, msg));
     }
   };
 
@@ -295,7 +339,41 @@ export default function ModulesTab({
                 if (node.type === 'source-file') setSelectedFileNode(node);
               }}
               onExpandModule={(node) => void handleExpandModule(node)}
-              statusForUrl={(url) => {
+              statusForUrl={(url, moduleNodeId) => {
+                // Three independent signals collapsed into one slot:
+                //   1. Live fetch state if the user just clicked this node.
+                //   2. Sourcemap-loaded confirmation once we have sources.
+                //   3. Probe-pass status otherwise (✓ declared / ✓ found / ✗ missing).
+                const fs = moduleNodeId ? moduleFetchState.get(moduleNodeId) : undefined;
+                if (fs === 'loading') {
+                  return (
+                    <span className="rounded border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-[10px] text-sky-200 animate-pulse">
+                      loading…
+                    </span>
+                  );
+                }
+                if (fs === 'error') {
+                  const err = moduleNodeId ? moduleFetchError.get(moduleNodeId) : undefined;
+                  return (
+                    <span
+                      title={err ?? 'fetch failed'}
+                      className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-200"
+                    >
+                      ! error
+                    </span>
+                  );
+                }
+                if (moduleNodeId && moduleExpansions.has(moduleNodeId)) {
+                  const m = moduleExpansions.get(moduleNodeId)!;
+                  return (
+                    <span
+                      title={`${m.sources.length} sources, ${m.sourcesContent.filter((c) => c !== null).length} with embedded content`}
+                      className="rounded border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-200"
+                    >
+                      ✓ {m.sources.length}
+                    </span>
+                  );
+                }
                 const rec = probeRecords.get(url);
                 if (!rec) return null;
                 return <SourceMapBadge record={rec} kindLabel="" />;

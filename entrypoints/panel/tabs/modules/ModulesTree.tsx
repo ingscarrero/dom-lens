@@ -9,8 +9,10 @@ interface Props {
   /** Called when the user expands a `module` node — drives the lazy
    * sourcemap fetch + tree-graft flow. */
   onExpandModule(node: ModuleTreeNode): void;
-  /** Per-module status badge data, indexed by module url. */
-  statusForUrl(url: string): JSX.Element | null;
+  /** Per-module status badge data. Receives both the module's url AND
+   * its tree-node id so the parent can disambiguate per-click fetch
+   * state from the snapshot-level probe state. */
+  statusForUrl(url: string, moduleNodeId?: string): JSX.Element | null;
   /** Filter string. When non-empty, the tree is pruned to nodes whose
    * subtree contains a match. Folders auto-expand. */
   filter: string;
@@ -97,7 +99,7 @@ export function ModulesTree({
           )}
           <NodeIcon type={node.type} />
           <span className="flex-1 truncate font-mono">{node.name}</span>
-          {node.type === 'module' && node.module && statusForUrl(node.module.url)}
+          {node.type === 'module' && node.module && statusForUrl(node.module.url, node.id)}
           {node.type === 'source-file' && node.bytes != null && (
             <span className="ml-1 shrink-0 font-mono text-[10px] text-panel-muted">
               {formatBytes(node.bytes)}
@@ -107,6 +109,17 @@ export function ModulesTree({
         {isOpen &&
           hasChildren &&
           node.children.map((c) => renderNode(c, depth + 1))}
+        {isOpen &&
+          node.type === 'module' &&
+          !hasChildren &&
+          expandedModules.has(node.id) && (
+            <div
+              className="text-[10px] italic text-panel-muted"
+              style={{ paddingLeft: depth * 12 + 28 }}
+            >
+              Fetching sourcemap… (check the badge for status)
+            </div>
+          )}
       </div>
     );
   };
