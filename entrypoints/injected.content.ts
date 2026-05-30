@@ -66,6 +66,11 @@ interface DomLensApi {
   scrollToSelector(selector: string, opts?: { label?: string; color?: string }):
     | { ok: true; rect: { x: number; y: number; w: number; h: number } }
     | { ok: false; reason: string };
+  /** Scroll the document so the given document-coord rect is centered
+   * in the viewport. Used by ComponentsTab to bring the selected
+   * fiber into view (the highlight overlay alone doesn't help if the
+   * rect is off-screen). */
+  scrollToBounds(x: number, y: number, w: number, h: number): { ok: true };
 }
 
 export default defineContentScript({
@@ -422,7 +427,7 @@ export default defineContentScript({
     }
 
     const api: DomLensApi = {
-      version: '0.3.18',
+      version: '0.3.19',
       capture(opts) {
         return runCapture(consoleBuffer, {
           maxMarkdownChars: opts?.maxMarkdownChars ?? 20000,
@@ -571,6 +576,25 @@ export default defineContentScript({
       },
       getPrimeLazyLoadStatus() {
         return primeState;
+      },
+      scrollToBounds(x, y, w, h) {
+        // Center the rect in the viewport. Document-coord input matches
+        // the bounds we store on ComponentNode (computed at capture
+        // time via getBoundingClientRect + scroll offset).
+        const cx = x + w / 2;
+        const cy = y + h / 2;
+        const left = Math.max(0, cx - window.innerWidth / 2);
+        const top = Math.max(0, cy - window.innerHeight / 2);
+        try {
+          window.scrollTo({ left, top, behavior: 'instant' as ScrollBehavior });
+        } catch {
+          try {
+            window.scrollTo(left, top);
+          } catch {
+            /* ignore */
+          }
+        }
+        return { ok: true };
       },
       scrollToSelector(selector, opts) {
         let el: Element | null = null;

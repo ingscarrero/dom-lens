@@ -2,6 +2,18 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Tree, type NodeApi, type NodeRendererProps } from 'react-arborist';
 import { useStore } from '../store';
 import type { ComponentNode } from '@/lib/react/fiberToTree';
+import { callScrollToBounds } from '../hooks/useInspectedEval';
+import { cropRegion } from '@/lib/snapshot/cropRegion';
+import {
+  UX_PRESETS,
+  buildUxVisionPayload,
+  customPromptId,
+  customPromptLabel,
+  type UxPreset,
+} from '@/lib/components/uxVisionPrompts';
+import { useLlm } from '@/lib/lm-studio/LlmContext';
+import { Tabs, type TabItem } from '@/lib/ui/Tabs';
+import { MarkdownRenderer } from '@/lib/ui/MarkdownRenderer';
 
 interface TreeRow {
   id: string;
@@ -147,6 +159,104 @@ export default function ComponentsTab() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [size, setSize] = useState({ width: 600, height: 600 });
   const treeApiRef = useRef<any>(null);
+  const llm = useLlm();
+  const settings = useStore((s) => s.settings);
+  const llmConfigured = !!settings.baseUrl && !!settings.model;
+  // UX-vision analysis state: each run lands in a tab; same id replaces.
+  const [analyses, setAnalyses] = useState<
+    Record<string, { label: string; icon: string; text: string; state: 'streaming' | 'done' | 'error'; error?: string }>
+  >({});
+  const [activeTab, setActiveTab] = useState<string>('components');
+  const [customOpen, setCustomOpen] = useState(false);
+  const [customPrompt, setCustomPrompt] = useState('');
+
+  // When the snapshot changes (new capture), reset analyses + selection.
+  useEffect(() => {
+    setAnalyses({});
+    setActiveTab('components');
+    setSelected(null);
+    setCustomOpen(false);
+    setCustomPrompt('');
+  }, [snap?.id]);
+
+  const runUxAnalysis = async (
+    preset: UxPreset | { id: string; customPrompt: string; label: string; icon: string },
+  ) => {
+    if (!llm || !snap?.screenshot || !selected?.bounds) return;
+    // Crop the selected region from the snapshot screenshot.
+    let imageDataUrl: string | null = null;
+    try {
+      imageDataUrl = await cropRegion(snap.screenshot, selected.bounds, { pad: 16 });
+    } catch (e) {
+      console.warn('[DOM Lens] cropRegion failed', e);
+    }
+    if (!imageDataUrl) {
+      // Bounds outside the captured screenshot — fall back to the full
+      // image so the model still has SOMETHING to look at.
+      imageDataUrl = snap.screenshot.dataUrl;
+    }
+    const isCustom = 'customPrompt' in preset;
+    const tabId = preset.id;
+    const label = preset.label;
+    const icon = preset.icon;
+    const payload = buildUxVisionPayload(
+      {
+        imageDataUrl,
+        componentName: selected.name,
+        componentKind: selected.kind,
+        boundsLabel: `${Math.round(selected.bounds.w)}×${Math.round(selected.bounds.h)} at (${Math.round(selected.bounds.x)},${Math.round(selected.bounds.y)})`,
+      },
+      isCustom
+        ? { id: preset.id, customPrompt: preset.customPrompt }
+        : (preset as UxPreset),
+      settings,
+    );
+    setAnalyses((a) => ({
+      ...a,
+      [tabId]: { label, icon, text: '', state: 'streaming' },
+    }));
+    setActiveTab(tabId);
+    let acc = '';
+    const handle = llm(payload, (delta) => {
+      acc += delta;
+      setAnalyses((a) => ({
+        ...a,
+        [tabId]: { label, icon, text: acc, state: 'streaming' },
+      }));
+    });
+    handle.result
+      .then((full) =>
+        setAnalyses((a) => ({
+          ...a,
+          [tabId]: { label, icon, text: full, state: 'done' },
+        })),
+      )
+      .catch((e) =>
+        setAnalyses((a) => ({
+          ...a,
+          [tabId]: {
+            label,
+            icon,
+            text: acc,
+            state: 'error',
+            error: e instanceof Error ? e.message : String(e),
+          },
+        })),
+      );
+  };
+
+  const runCustomPrompt = () => {
+    const trimmed = customPrompt.trim();
+    if (!trimmed) return;
+    void runUxAnalysis({
+      id: customPromptId(trimmed),
+      customPrompt: trimmed,
+      label: customPromptLabel(trimmed),
+      icon: '💬',
+    });
+    setCustomOpen(false);
+    setCustomPrompt('');
+  };
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -188,8 +298,37 @@ export default function ComponentsTab() {
     );
   }
 
+  const tabItems: TabItem[] = [
+    { id: 'components', label: 'Components', icon: '🧩' },
+    ...Object.entries(analyses).map(([id, a]) => ({
+      id,
+      label: a.label,
+      icon: a.icon,
+      badge: a.state,
+      closable: true,
+    })),
+  ];
+
   return (
     <div className="flex h-full flex-col">
+      <Tabs
+        tabs={tabItems}
+        activeId={activeTab}
+        onSelect={setActiveTab}
+        onClose={(id) => {
+          if (id === 'components') return;
+          setAnalyses((a) => {
+            const next = { ...a };
+            delete next[id];
+            return next;
+          });
+          if (activeTab === id) setActiveTab('components');
+        }}
+      >
+        {activeTab !== 'components' ? (
+          <UxAnalysisPane result={analyses[activeTab]} />
+        ) : (
+          <div className="flex h-full flex-col">
       <div className="flex flex-wrap items-center gap-2 border-b border-panel-border bg-panel-surface px-2 py-1.5 text-[11px]">
         <input
           type="text"
@@ -266,6 +405,18 @@ export default function ComponentsTab() {
                   hint: row.hint,
                   bounds: row.bounds,
                 });
+                // Bring the selected fiber into view on the inspected page.
+                // The highlight overlay is positioned in document coords,
+                // so scrolling here is the difference between the user
+                // seeing the rect and seeing a blank scroll position.
+                if (row.bounds && row.bounds.w > 0 && row.bounds.h > 0) {
+                  void callScrollToBounds(
+                    row.bounds.x,
+                    row.bounds.y,
+                    row.bounds.w,
+                    row.bounds.h,
+                  );
+                }
               } else {
                 setFocused(null);
               }
@@ -331,11 +482,152 @@ export default function ComponentsTab() {
                   </div>
                 )}
               </div>
+              {selected.bounds && (
+                <div className="mt-3 border-t border-panel-border pt-2">
+                  <div className="mb-1 text-[10px] uppercase tracking-wide text-panel-muted">
+                    Analyze region with AI
+                  </div>
+                  {!llmConfigured ? (
+                    <div className="text-[10px] text-panel-muted">
+                      Configure a local LLM in Settings to enable.
+                    </div>
+                  ) : !snap.screenshot ? (
+                    <div className="text-[10px] text-panel-muted">
+                      Capture a snapshot screenshot first (needs an image
+                      to send to the model).
+                    </div>
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-1 gap-1">
+                        {UX_PRESETS.map((p) => (
+                          <button
+                            key={p.id}
+                            type="button"
+                            onClick={() => void runUxAnalysis(p)}
+                            title={p.hint}
+                            disabled={analyses[p.id]?.state === 'streaming'}
+                            className="flex items-center gap-1.5 rounded border border-panel-accent/40 bg-panel-accent/10 px-1.5 py-0.5 text-left text-[10px] text-panel-accent hover:bg-panel-accent/20 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <span>{p.icon}</span>
+                            <span className="font-medium">{p.label}</span>
+                            {analyses[p.id]?.state === 'streaming' && (
+                              <span className="ml-auto text-panel-muted">…</span>
+                            )}
+                            {analyses[p.id]?.state === 'done' && (
+                              <span className="ml-auto text-emerald-300">✓</span>
+                            )}
+                            {analyses[p.id]?.state === 'error' && (
+                              <span className="ml-auto text-red-300">✗</span>
+                            )}
+                          </button>
+                        ))}
+                        <button
+                          type="button"
+                          onClick={() => setCustomOpen((v) => !v)}
+                          className="flex items-center gap-1.5 rounded border border-violet-500/40 bg-violet-500/10 px-1.5 py-0.5 text-left text-[10px] text-violet-200 hover:bg-violet-500/20"
+                        >
+                          <span>💬</span>
+                          <span className="font-medium">
+                            {customOpen ? 'Hide custom prompt' : 'Custom prompt…'}
+                          </span>
+                        </button>
+                      </div>
+                      {customOpen && (
+                        <div className="mt-2 rounded border border-panel-border bg-black/20 p-1.5">
+                          <textarea
+                            className="block w-full rounded border border-panel-border bg-black/30 p-1 text-[10px] text-panel-text"
+                            rows={3}
+                            placeholder="Ask anything UX/brand/research about this region…"
+                            value={customPrompt}
+                            onChange={(e) => setCustomPrompt(e.target.value)}
+                          />
+                          <div className="mt-1 flex justify-end gap-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setCustomOpen(false);
+                                setCustomPrompt('');
+                              }}
+                              className="rounded border border-panel-border px-1.5 py-0.5 text-[10px] text-panel-muted hover:text-white"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              onClick={runCustomPrompt}
+                              disabled={!customPrompt.trim()}
+                              className="rounded bg-panel-accent px-1.5 py-0.5 text-[10px] font-medium text-white hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              Run
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
             </>
           ) : (
             <div className="text-panel-muted">Click a node to inspect, highlight, or focus its subtree.</div>
           )}
         </aside>
+      </div>
+          </div>
+        )}
+      </Tabs>
+    </div>
+  );
+}
+
+function UxAnalysisPane({
+  result,
+}: {
+  result: {
+    label: string;
+    icon: string;
+    text: string;
+    state: 'streaming' | 'done' | 'error';
+    error?: string;
+  } | undefined;
+}) {
+  if (!result) {
+    return (
+      <div className="flex h-full items-center justify-center text-[11px] text-panel-muted">
+        Result lost — re-run the analysis from the Components tab.
+      </div>
+    );
+  }
+  return (
+    <div className="flex h-full flex-col">
+      <div className="shrink-0 border-b border-panel-border bg-panel-surface px-3 py-1.5 text-[10px] uppercase tracking-wide text-panel-muted">
+        <span className="mr-1">{result.icon}</span>
+        {result.label}
+        <span className="ml-2">
+          {result.state === 'streaming'
+            ? '· streaming'
+            : result.state === 'error'
+              ? '· error'
+              : '· done'}
+        </span>
+      </div>
+      <div className="scrollbar-thin min-h-0 flex-1 overflow-auto p-3 text-[12px]">
+        {result.text ? (
+          <MarkdownRenderer
+            source={result.text}
+            streaming={result.state === 'streaming'}
+          />
+        ) : (
+          <div className="text-[11px] text-panel-muted">Asking model…</div>
+        )}
+        {result.state === 'streaming' && (
+          <span className="ml-0.5 inline-block animate-pulse">▍</span>
+        )}
+        {result.state === 'error' && result.error && (
+          <div className="mt-2 rounded border border-red-500/40 bg-red-500/10 px-2 py-1 text-[10px] text-red-200">
+            {result.error}
+          </div>
+        )}
       </div>
     </div>
   );

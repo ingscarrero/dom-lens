@@ -220,6 +220,28 @@ export async function callFindAssetUsages(url: string): Promise<
 }
 
 /**
+ * Centers a document-coord rect in the viewport. The Components tab
+ * calls this whenever the user picks a different fiber so the
+ * highlight overlay actually has something to overlay (the rect may
+ * be far below the fold).
+ */
+export async function callScrollToBounds(
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+): Promise<void> {
+  const expr = `(function(){
+    try {
+      if (!window.__dom_lens__ || typeof window.__dom_lens__.scrollToBounds !== 'function') return 'no-api';
+      window.__dom_lens__.scrollToBounds(${x}, ${y}, ${w}, ${h});
+      return 'ok';
+    } catch(e) { return 'error'; }
+  })()`;
+  await inspectedEval<string>(expr);
+}
+
+/**
  * Drives the main world to scroll an element matching `selector` into view
  * and paint the existing highlight overlay around it. Used by the Modules
  * tab to "go to" a DOM usage site of an image asset.
