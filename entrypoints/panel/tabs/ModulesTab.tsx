@@ -475,6 +475,7 @@ export default function ModulesTab({
                     node={selectedFileNode}
                     streamingOneshot={streamingOneshot}
                     parentModuleUrl={moduleNode?.module?.url}
+                    fetchText={fetchText}
                   />
                 );
               }

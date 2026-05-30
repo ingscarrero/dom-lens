@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useStore } from '../../store';
 import type { ModuleTreeNode } from '@/lib/modules/moduleTree';
 import {
@@ -25,6 +25,19 @@ interface Props {
    * mapping resolution (we need the bundle URL to match against
    * `urlPattern` — the source path alone is not enough). */
   parentModuleUrl?: string;
+  /** Panel-side fetch proxy for grabbing raw.githubusercontent.com
+   * content when the user picks the GitHub source mode (or when
+   * `sourcesContent` is null and a mapping resolves). */
+  fetchText?: (url: string) => Promise<string>;
+}
+
+type SourceMode = 'sourcemap' | 'github';
+
+interface GithubFetchState {
+  status: 'idle' | 'loading' | 'ok' | 'error';
+  text?: string;
+  message?: string;
+  url?: string;
 }
 
 function useGithubLink(
@@ -53,9 +66,60 @@ function useGithubLink(
  * the existing streaming-oneshot pipeline so the user sees progress
  * token-by-token.
  */
-export function FileDetail({ node, streamingOneshot, parentModuleUrl }: Props) {
+export function FileDetail({
+  node,
+  streamingOneshot,
+  parentModuleUrl,
+  fetchText,
+}: Props) {
   const settings = useStore((s) => s.settings);
   const githubLink = useGithubLink(parentModuleUrl, node.sourcePath, settings.githubMappings ?? []);
+
+  const localContent = node.sourceContent ?? null;
+  const hasLocalSource = typeof localContent === 'string' && localContent.length > 0;
+  const canGithub = !!githubLink && !!fetchText;
+
+  // Default to GitHub when (a) the user has a mapping AND (b) there's no
+  // embedded sourcesContent. That's the genuine production case
+  // (`nosources-source-map` builds); without the auto-default the user
+  // would land on a "no content embedded" placeholder.
+  const [mode, setMode] = useState<SourceMode>(
+    canGithub && !hasLocalSource ? 'github' : 'sourcemap',
+  );
+
+  // Reset mode whenever the node changes so a new selection starts in
+  // the right default. Same auto-default rule.
+  useEffect(() => {
+    setMode(canGithub && !hasLocalSource ? 'github' : 'sourcemap');
+  }, [node.id, canGithub, hasLocalSource]);
+
+  // Lazy GitHub fetch — cached per request URL.
+  const [ghState, setGhState] = useState<GithubFetchState>({ status: 'idle' });
+
+  useEffect(() => {
+    if (mode !== 'github') return;
+    if (!githubLink || !fetchText) return;
+    // Already loaded this URL? skip.
+    if (ghState.status === 'ok' && ghState.url === githubLink.rawUrl) return;
+    let cancelled = false;
+    setGhState({ status: 'loading', url: githubLink.rawUrl });
+    fetchText(githubLink.rawUrl)
+      .then((text) => {
+        if (cancelled) return;
+        setGhState({ status: 'ok', text, url: githubLink.rawUrl });
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setGhState({
+          status: 'error',
+          message: e instanceof Error ? e.message : String(e),
+          url: githubLink.rawUrl,
+        });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, githubLink?.rawUrl, fetchText]); // eslint-disable-line react-hooks/exhaustive-deps
   const [active, setActive] = useState<FileAction | null>(null);
   const [result, setResult] = useState<{
     action: FileAction;
@@ -64,9 +128,14 @@ export function FileDetail({ node, streamingOneshot, parentModuleUrl }: Props) {
     error?: string;
   } | null>(null);
 
-  const sourceContent = node.sourceContent ?? null;
+  // Pick which content to render + run analyses against.
+  const activeContent =
+    mode === 'github' && ghState.status === 'ok' && ghState.text !== undefined
+      ? ghState.text
+      : localContent;
+  const sourceContent = activeContent;
   const language = detectLanguage(node.sourcePath ?? node.name);
-  const hasSource = typeof sourceContent === 'string' && sourceContent.length > 0;
+  const hasSource = typeof activeContent === 'string' && activeContent.length > 0;
   const llmConfigured = !!settings.baseUrl && !!settings.model;
 
   const runAction = (action: FileAction) => {
@@ -128,6 +197,62 @@ export function FileDetail({ node, streamingOneshot, parentModuleUrl }: Props) {
             )}
           </div>
         </div>
+        {canGithub && (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]">
+            <span className="text-panel-muted">Source:</span>
+            <div className="flex rounded border border-panel-border bg-black/30 text-[10px]">
+              <button
+                type="button"
+                onClick={() => setMode('sourcemap')}
+                disabled={!hasLocalSource}
+                title={
+                  hasLocalSource
+                    ? 'Render the file from the sourcemap\'s embedded sourcesContent'
+                    : 'No content embedded in the sourcemap for this file (likely a nosources-source-map build)'
+                }
+                className={
+                  'px-2 py-0.5 ' +
+                  (mode === 'sourcemap'
+                    ? 'bg-panel-accent/30 text-white'
+                    : 'text-panel-muted hover:text-white disabled:opacity-40')
+                }
+              >
+                📦 Sourcemap
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode('github')}
+                title={`Fetch from ${githubLink?.rawUrl ?? 'GitHub'}`}
+                className={
+                  'px-2 py-0.5 ' +
+                  (mode === 'github'
+                    ? 'bg-panel-accent/30 text-white'
+                    : 'text-panel-muted hover:text-white')
+                }
+              >
+                🐙 GitHub
+              </button>
+            </div>
+            {mode === 'github' && ghState.status === 'loading' && (
+              <span className="text-[10px] text-panel-muted animate-pulse">
+                fetching from raw.githubusercontent.com…
+              </span>
+            )}
+            {mode === 'github' && ghState.status === 'ok' && (
+              <span className="text-[10px] text-emerald-300">
+                ✓ live from {githubLink?.mapping.label}
+              </span>
+            )}
+            {mode === 'github' && ghState.status === 'error' && (
+              <span
+                className="text-[10px] text-red-300"
+                title={ghState.message}
+              >
+                ✗ {ghState.message}
+              </span>
+            )}
+          </div>
+        )}
         {hasSource && (
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
             {(['audit', 'improve', 'explain'] as FileAction[]).map((a) => (
@@ -157,14 +282,43 @@ export function FileDetail({ node, streamingOneshot, parentModuleUrl }: Props) {
             <CodeViewer
               code={sourceContent ?? ''}
               language={language}
-              filename={node.sourcePath ?? node.name}
+              filename={
+                mode === 'github' && githubLink
+                  ? githubLink.webUrl.replace('https://', '')
+                  : (node.sourcePath ?? node.name)
+              }
             />
+          ) : mode === 'github' && ghState.status === 'loading' ? (
+            <div className="flex h-full items-center justify-center text-[11px] text-panel-muted">
+              Fetching from {githubLink?.rawUrl}…
+            </div>
+          ) : mode === 'github' && ghState.status === 'error' ? (
+            <div className="m-3 rounded border border-red-500/40 bg-red-500/10 p-3 text-[11px] text-red-200">
+              <div className="font-semibold">Could not fetch source from GitHub.</div>
+              <div className="mt-1 text-[10px]">{ghState.message}</div>
+              <div className="mt-2 text-[10px] text-red-200/70">
+                Probed URL: <span className="font-mono">{ghState.url}</span>
+              </div>
+              {hasLocalSource && (
+                <button
+                  type="button"
+                  onClick={() => setMode('sourcemap')}
+                  className="mt-2 rounded border border-panel-border px-2 py-0.5 text-[10px] text-panel-text hover:text-white"
+                >
+                  Fall back to sourcemap content →
+                </button>
+              )}
+            </div>
           ) : (
             <pre className="m-0 overflow-auto bg-black/30 p-2 font-mono text-[11px] leading-snug text-panel-text">
               <code>
                 {'/* No source content embedded in the sourcemap.\n' +
                   ' * The bundler likely used `nosources-source-map` or stripped sourcesContent\n' +
-                  ' * for this file. Try fetching the deployed bundle instead. */'}
+                  ' * for this file.' +
+                  (canGithub
+                    ? ' Toggle "🐙 GitHub" above to fetch the canonical copy from the repository.'
+                    : ' Add a GitHub mapping in Settings to pull from the repo instead.') +
+                  ' */'}
               </code>
             </pre>
           )}
