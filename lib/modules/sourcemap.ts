@@ -66,22 +66,88 @@ function decodeInlineSourceMap(dataUri: string): RawSourceMap | null {
  * mappings. The resulting tree groups sources by path segment so the UI can
  * render a folder-style breakdown.
  */
+/**
+ * Typed error so the panel can present `step` + `mapUrl` + the underlying
+ * cause in a useful way, instead of dumping a raw "Unexpected token <"
+ * (which used to leak through when a 404 HTML page was JSON.parse'd).
+ */
+export class SourcemapFetchError extends Error {
+  readonly step: 'resolve' | 'fetch' | 'parse';
+  readonly mapUrl?: string;
+  readonly cause?: unknown;
+  constructor(
+    message: string,
+    opts: { step: 'resolve' | 'fetch' | 'parse'; mapUrl?: string; cause?: unknown },
+  ) {
+    super(message);
+    this.name = 'SourcemapFetchError';
+    this.step = opts.step;
+    this.mapUrl = opts.mapUrl;
+    this.cause = opts.cause;
+  }
+}
+
 export async function fetchAndParseSourceMap(
   module: LoadedModule,
   fetchText: (url: string) => Promise<string>,
 ): Promise<ParsedSourceMap> {
-  const resolved = await resolveSourceMapUrl(module.url, fetchText);
-  if (!resolved) throw new Error('Could not resolve sourcemap URL');
+  let resolved: { url: string; inlineMap?: RawSourceMap } | null;
+  try {
+    resolved = await resolveSourceMapUrl(module.url, fetchText);
+  } catch (e) {
+    throw new SourcemapFetchError(
+      `Could not resolve sourcemap URL for ${module.url}: ${errMsg(e)}`,
+      { step: 'resolve', cause: e },
+    );
+  }
+  if (!resolved) {
+    throw new SourcemapFetchError(
+      `No sourcemap reference found for ${module.url} (no //# sourceMappingURL trailer, no .map sibling).`,
+      { step: 'resolve' },
+    );
+  }
 
   let raw: RawSourceMap;
   if (resolved.inlineMap) {
     raw = resolved.inlineMap;
   } else {
-    const text = await fetchText(resolved.url);
-    raw = JSON.parse(text) as RawSourceMap;
+    let text: string;
+    try {
+      text = await fetchText(resolved.url);
+    } catch (e) {
+      throw new SourcemapFetchError(`${errMsg(e)}`, {
+        step: 'fetch',
+        mapUrl: resolved.url,
+        cause: e,
+      });
+    }
+    try {
+      raw = JSON.parse(text) as RawSourceMap;
+    } catch (e) {
+      // Most often happens when a 404 HTML page got through (now
+      // prevented at the SW level, but still possible on weird hosts
+      // that return 200 for not-found). Include a short snippet of the
+      // body so the user can recognise an HTML response at a glance.
+      const peek = text.slice(0, 80).replace(/\s+/g, ' ');
+      throw new SourcemapFetchError(
+        `Sourcemap at ${resolved.url} was not valid JSON. First 80 chars: "${peek}…"`,
+        { step: 'parse', mapUrl: resolved.url, cause: e },
+      );
+    }
   }
 
-  return parseSourceMap(raw);
+  try {
+    return parseSourceMap(raw);
+  } catch (e) {
+    throw new SourcemapFetchError(
+      `Sourcemap at ${resolved.url} parsed as JSON but VLQ walk failed: ${errMsg(e)}`,
+      { step: 'parse', mapUrl: resolved.url, cause: e },
+    );
+  }
+}
+
+function errMsg(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
 }
 
 /**

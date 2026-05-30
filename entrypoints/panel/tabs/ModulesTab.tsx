@@ -56,7 +56,9 @@ export default function ModulesTab({
   const [moduleFetchState, setModuleFetchState] = useState<Map<string, 'loading' | 'error'>>(
     new Map(),
   );
-  const [moduleFetchError, setModuleFetchError] = useState<Map<string, string>>(new Map());
+  const [moduleFetchError, setModuleFetchError] = useState<
+    Map<string, { message: string; step?: 'resolve' | 'fetch' | 'parse'; mapUrl?: string }>
+  >(new Map());
 
   const modules = snap?.modules ?? [];
   const techStack = snap?.techStack;
@@ -161,10 +163,32 @@ export default function ModulesTab({
       );
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      const step =
+        e instanceof Error && (e as any).step
+          ? ((e as any).step as 'resolve' | 'fetch' | 'parse')
+          : undefined;
+      const mapUrl =
+        e instanceof Error && (e as any).mapUrl ? ((e as any).mapUrl as string) : undefined;
       console.warn('[DOM Lens] sourcemap fetch failed for', node.module.url, '·', msg);
       setModuleFetchState((prev) => new Map(prev).set(node.id, 'error'));
-      setModuleFetchError((prev) => new Map(prev).set(node.id, msg));
+      setModuleFetchError((prev) => new Map(prev).set(node.id, { message: msg, step, mapUrl }));
     }
+  };
+
+  // Reset error + state for a single module then re-run the fetch. Wired
+  // to the "Retry" button surfaced in the error banner.
+  const retryExpandModule = (node: ModuleTreeNode) => {
+    setModuleFetchState((prev) => {
+      const next = new Map(prev);
+      next.delete(node.id);
+      return next;
+    });
+    setModuleFetchError((prev) => {
+      const next = new Map(prev);
+      next.delete(node.id);
+      return next;
+    });
+    void handleExpandModule(node);
   };
 
   const filtered = useMemo(() => {
@@ -330,8 +354,33 @@ export default function ModulesTab({
 
       {viewMode === 'tree' && tree && (
         <div className="grid min-h-0 flex-1 grid-cols-[minmax(220px,32%)_1fr]">
-          <div className="min-h-0 overflow-auto border-r border-panel-border bg-panel-bg/30">
-            <ModulesTree
+          <div className="flex min-h-0 flex-col overflow-hidden border-r border-panel-border bg-panel-bg/30">
+            {moduleFetchError.size > 0 && (
+              <SourcemapErrorBanner
+                errors={moduleFetchError}
+                tree={tree}
+                onRetry={(nodeId) => {
+                  // Find the node in the tree, dispatch retry on it.
+                  const node = findModuleNodeById(tree, nodeId);
+                  if (node) retryExpandModule(node);
+                }}
+                onSwitchToFlat={() => setViewMode('flat')}
+                onDismiss={(nodeId) => {
+                  setModuleFetchError((prev) => {
+                    const next = new Map(prev);
+                    next.delete(nodeId);
+                    return next;
+                  });
+                  setModuleFetchState((prev) => {
+                    const next = new Map(prev);
+                    next.delete(nodeId);
+                    return next;
+                  });
+                }}
+              />
+            )}
+            <div className="min-h-0 flex-1 overflow-auto">
+              <ModulesTree
               root={tree}
               selectedId={selectedNodeId}
               onSelect={(node) => {
@@ -356,7 +405,7 @@ export default function ModulesTab({
                   const err = moduleNodeId ? moduleFetchError.get(moduleNodeId) : undefined;
                   return (
                     <span
-                      title={err ?? 'fetch failed'}
+                      title={err?.message ?? 'fetch failed'}
                       className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-200"
                     >
                       ! error
@@ -380,6 +429,7 @@ export default function ModulesTab({
               }}
               filter={query}
             />
+            </div>
           </div>
           <div className="min-h-0 overflow-hidden">
             {selectedFileNode ? (
@@ -1364,6 +1414,105 @@ function SourceMapBadge({
     default:
       return <span className="text-panel-muted">?</span>;
   }
+}
+
+/**
+ * Recursive lookup of a module node by its tree id (the deployed bundle
+ * URL). Used by the error banner's Retry button.
+ */
+function findModuleNodeById(
+  node: ModuleTreeNode,
+  id: string,
+): ModuleTreeNode | null {
+  if (node.id === id && node.type === 'module') return node;
+  for (const c of node.children) {
+    const f = findModuleNodeById(c, id);
+    if (f) return f;
+  }
+  return null;
+}
+
+/**
+ * Persistent error banner at the top of the tree pane. Lists every
+ * module whose sourcemap fetch failed, with the underlying message, the
+ * step that failed (resolve / fetch / parse), Retry, and a button to
+ * jump to the Flat view's "Map module" UX which works without a real
+ * sourcemap.
+ */
+function SourcemapErrorBanner({
+  errors,
+  tree,
+  onRetry,
+  onSwitchToFlat,
+  onDismiss,
+}: {
+  errors: Map<string, { message: string; step?: 'resolve' | 'fetch' | 'parse'; mapUrl?: string }>;
+  tree: ModuleTreeNode;
+  onRetry: (nodeId: string) => void;
+  onSwitchToFlat: () => void;
+  onDismiss: (nodeId: string) => void;
+}) {
+  return (
+    <div className="border-b border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-100">
+      <div className="mb-1 flex items-center justify-between">
+        <span className="font-semibold">Sourcemap errors ({errors.size})</span>
+        <button
+          type="button"
+          onClick={onSwitchToFlat}
+          className="text-[10px] text-panel-accent hover:text-sky-300"
+          title="Switch to the Flat view to use the regex-based Map module skeleton extractor, which works without a real sourcemap."
+        >
+          Try without sourcemap →
+        </button>
+      </div>
+      <ul className="space-y-1">
+        {Array.from(errors.entries()).map(([nodeId, err]) => {
+          const node = findModuleNodeById(tree, nodeId);
+          const label = node?.module?.pathname ?? nodeId;
+          return (
+            <li
+              key={nodeId}
+              className="rounded border border-amber-500/30 bg-black/30 px-2 py-1"
+            >
+              <div className="flex items-baseline justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="truncate font-mono text-[11px] text-amber-100">
+                    {label}
+                  </div>
+                  {err.step && (
+                    <div className="text-[10px] uppercase tracking-wide text-amber-200/70">
+                      step: {err.step}
+                      {err.mapUrl ? ` · ${shorten(err.mapUrl)}` : ''}
+                    </div>
+                  )}
+                </div>
+                <div className="flex shrink-0 gap-1">
+                  <button
+                    type="button"
+                    onClick={() => onRetry(nodeId)}
+                    className="rounded border border-amber-500/40 px-1.5 py-0.5 text-[10px] hover:bg-amber-500/20"
+                  >
+                    Retry
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onDismiss(nodeId)}
+                    title="Dismiss this error"
+                    className="rounded border border-amber-500/30 px-1.5 py-0.5 text-[10px] text-amber-200/80 hover:bg-amber-500/10"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+              <div className="mt-1 break-words text-[10px] text-amber-100/90">
+                {err.message}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
 }
 
 function shorten(path: string): string {

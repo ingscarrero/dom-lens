@@ -7,6 +7,15 @@ import { chatStream, listModels } from '@/lib/lm-studio/client';
  * window. Long pages stitching many tiles regularly trip this. Retry with
  * exponential backoff when the call rejects, up to a few attempts.
  */
+/** Human-readable byte formatting used only for error messages. The
+ * panel has its own formatter; we keep this one minimal so the SW
+ * stays small. */
+function formatBytesForError(n: number): string {
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  return (n / (1024 * 1024)).toFixed(2) + ' MB';
+}
+
 async function captureVisibleTabWithRetry(
   windowId: number,
   attempts = 4,
@@ -220,17 +229,34 @@ export default defineBackground({
             return;
           }
           if (msg.type === 'net.fetch') {
-            const max = msg.maxBytes ?? 8 * 1024 * 1024; // 8 MB cap
+            // 32 MB cap — sourcemaps for monorepo bundles routinely hit
+            // 10-20 MB. 32 is the empirical ceiling before
+            // memory pressure inside the SW becomes noticeable.
+            const max = msg.maxBytes ?? 32 * 1024 * 1024;
             try {
               const res = await fetch(msg.url, { credentials: 'omit', redirect: 'follow' });
               const contentType = res.headers.get('content-type') ?? undefined;
+              // `fetch` resolves successfully on 4xx/5xx — it only rejects
+              // on network/CORS/abort errors. So we have to check `ok`
+              // explicitly. Returning the 404 HTML body to the caller as
+              // a "successful" fetch was the source of confusing
+              // "Unexpected token <" parse errors in the panel.
+              if (!res.ok) {
+                send({
+                  type: 'net.fetch.result',
+                  requestId: msg.requestId,
+                  ok: false,
+                  message: `HTTP ${res.status} ${res.statusText || ''} — ${msg.url}`.trim(),
+                });
+                return;
+              }
               const buf = await res.arrayBuffer();
               if (buf.byteLength > max) {
                 send({
                   type: 'net.fetch.result',
                   requestId: msg.requestId,
                   ok: false,
-                  message: `Response too large (${buf.byteLength} bytes, max ${max})`,
+                  message: `Response too large: ${formatBytesForError(buf.byteLength)} (cap is ${formatBytesForError(max)}). The asset may be a heavy sourcemap — consider raising the cap.`,
                 });
                 return;
               }
@@ -244,11 +270,14 @@ export default defineBackground({
                 contentType,
               });
             } catch (e: any) {
+              // Network errors land here ("Failed to fetch" on CORS or
+              // DNS, abort, etc.). Pass the message through verbatim so
+              // the panel can surface it.
               send({
                 type: 'net.fetch.result',
                 requestId: msg.requestId,
                 ok: false,
-                message: e?.message ?? String(e),
+                message: `Network error fetching ${msg.url}: ${e?.message ?? String(e)}`,
               });
             }
             return;
