@@ -22,6 +22,29 @@ Then open:
 
 Stop with `Ctrl+C` — `concurrently --kill-others-on-fail` shuts both down.
 
+### GitHub source mappings
+
+DOM Lens v0.3.14+ can link deployed modules to their source on GitHub.
+For this demo the source has been pushed to two public repos that mirror
+`host/` and `remote/`:
+
+- **Host** → [`ingscarrero/dom-lens-mf-host`](https://github.com/ingscarrero/dom-lens-mf-host)
+- **Remote** → [`ingscarrero/dom-lens-mf-remote`](https://github.com/ingscarrero/dom-lens-mf-remote)
+
+To wire them up: open the DOM Lens panel → **Settings** → **GitHub
+source mappings** → add these two entries:
+
+| Label | URL pattern | Repository | Branch |
+|---|---|---|---|
+| MF demo host | `localhost:3001` | `ingscarrero/dom-lens-mf-host` | `main` |
+| MF demo remote | `localhost:3002` | `ingscarrero/dom-lens-mf-remote` | `main` |
+
+Then capture `http://localhost:3001`, expand `main.js` in the Modules
+tab, click any authored source file. The toolbar will show a
+**🐙 GitHub** link pointing at the canonical source on github.com.
+The ModuleAnalysis pane (when a module 📦 is selected) shows a repo
+card with the matched mapping label.
+
 ### Sourcemap toggle
 
 Both webpack configs default to `devtool: 'source-map'`, so the demo
