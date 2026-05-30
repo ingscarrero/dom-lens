@@ -15,6 +15,7 @@ import { runCapture } from './captureFlow';
 import { runEnhanceStitch } from './enhanceFlow';
 import { callClearHighlight, callHighlight } from './hooks/useInspectedEval';
 import { createFetchProxy } from '@/lib/modules/fetchProxy';
+import { createOneshotProxy } from '@/lib/lm-studio/oneshotProxy';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'snapshot', label: 'Snapshot' },
@@ -102,6 +103,14 @@ export default function App() {
       }),
   });
 
+  const oneshot = createOneshotProxy({
+    post: (m) => port.post(m),
+    awaitResult: (requestId) =>
+      new Promise((resolve) => {
+        oneshotWaitersRef.current.set(requestId, resolve);
+      }),
+  });
+
   useEffect(() => {
     loadSettings().then(setSettings);
     return onSettingsChanged(setSettings);
@@ -173,7 +182,7 @@ export default function App() {
       <header className="flex items-center justify-between border-b border-panel-border bg-panel-surface px-3 py-2">
         <div className="flex items-center gap-2">
           <span className="text-sm font-semibold">DOM Lens</span>
-          <span className="text-xs text-panel-muted">v0.3.5</span>
+          <span className="text-xs text-panel-muted">v0.3.6</span>
         </div>
         <div className="flex items-center gap-2">
           {capturing && captureProgress && (
@@ -236,7 +245,7 @@ export default function App() {
         )}
         {tab === 'components' && <ComponentsTab />}
         {tab === 'federation' && <FederationTab />}
-        {tab === 'modules' && <ModulesTab fetchText={fetchText} />}
+        {tab === 'modules' && <ModulesTab fetchText={fetchText} oneshot={oneshot} />}
         {tab === 'insights' && (
           <InsightsTab
             setTab={setTab}

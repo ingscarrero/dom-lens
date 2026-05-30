@@ -45,6 +45,19 @@ interface DomLensApi {
     | { status: 'idle' | 'running' }
     | { status: 'done'; finalHeight: number; finalWidth: number; startY: number }
     | { status: 'error'; message: string };
+  /** Walk the DOM looking for elements that reference the given asset URL —
+   * <img src>, <link href>, <source srcset>, inline style background-image,
+   * and computed-style background-image. Used by the Modules tab to show
+   * "where is this image used on the page?". */
+  findAssetUsages(url: string): {
+    ok: true;
+    usages: Array<{
+      tag: string;
+      attribute: string;
+      selector: string;
+      text?: string;
+    }>;
+  };
 }
 
 export default defineContentScript({
@@ -159,6 +172,76 @@ export default defineContentScript({
       | { status: 'done'; finalHeight: number; finalWidth: number; startY: number }
       | { status: 'error'; message: string };
     let primeState: PrimeState = { status: 'idle' };
+
+    /**
+     * Builds a set of candidate substrings that should "match" a usage of
+     * the asset URL. We accept absolute, relative, and just-filename forms
+     * because the network records the absolute URL but inline references
+     * (link href, src) often use the relative path.
+     */
+    function buildMatchers(url: string): string[] {
+      const out = new Set<string>();
+      try {
+        const u = new URL(url);
+        out.add(u.href);
+        out.add(u.pathname);
+        const last = u.pathname.split('/').filter(Boolean).pop();
+        if (last) out.add(last);
+      } catch {
+        out.add(url);
+      }
+      return Array.from(out).filter((s) => s.length >= 4);
+    }
+
+    function anyMatch(text: string, matchers: string[]): boolean {
+      for (const m of matchers) if (text.includes(m)) return true;
+      return false;
+    }
+
+    /**
+     * Best-effort CSS selector for an element: id wins; otherwise
+     * tag + nth-of-type up to 4 levels deep. Truncated to a sane length
+     * for the UI.
+     */
+    function selectorFor(el: Element, maxDepth = 4): string {
+      if (el.id) return '#' + cssEscape(el.id);
+      const parts: string[] = [];
+      let cur: Element | null = el;
+      let depth = 0;
+      while (cur && cur.nodeType === 1 && depth < maxDepth) {
+        const tag = cur.tagName;
+        let part = tag.toLowerCase();
+        const cls = (cur as HTMLElement).className;
+        if (typeof cls === 'string' && cls.trim()) {
+          part += '.' + cls.trim().split(/\s+/).slice(0, 2).map(cssEscape).join('.');
+        }
+        const parentEl: Element | null = cur.parentElement;
+        if (parentEl) {
+          const sibs: Element[] = [];
+          for (let i = 0; i < parentEl.children.length; i++) {
+            const child = parentEl.children[i];
+            if (child.tagName === tag) sibs.push(child);
+          }
+          if (sibs.length > 1) {
+            part += ':nth-of-type(' + (sibs.indexOf(cur) + 1) + ')';
+          }
+        }
+        parts.unshift(part);
+        cur = parentEl;
+        depth += 1;
+      }
+      const s = parts.join(' > ');
+      return s.length > 120 ? '…' + s.slice(-120) : s;
+    }
+
+    function cssEscape(s: string): string {
+      try {
+        // Native CSS.escape exists in all modern browsers.
+        return (window as any).CSS?.escape?.(s) ?? s.replace(/[^a-zA-Z0-9_-]/g, '\\$&');
+      } catch {
+        return s.replace(/[^a-zA-Z0-9_-]/g, '\\$&');
+      }
+    }
 
     // Capture-mode CSS overrides: force scroll-behavior to auto so our
     // scrollTo()s land instantly even on pages that use `scroll-behavior:
@@ -331,7 +414,7 @@ export default defineContentScript({
     }
 
     const api: DomLensApi = {
-      version: '0.3.5',
+      version: '0.3.6',
       capture(opts) {
         return runCapture(consoleBuffer, {
           maxMarkdownChars: opts?.maxMarkdownChars ?? 20000,
@@ -480,6 +563,95 @@ export default defineContentScript({
       },
       getPrimeLazyLoadStatus() {
         return primeState;
+      },
+      findAssetUsages(url) {
+        // Trims protocol/host so a relative match still wins. We compare on
+        // the absolute URL plus the pathname + filename — covers the common
+        // case where the same asset appears in network as
+        // https://cdn.example/x/y/z.png and inline as /x/y/z.png or just
+        // z.png.
+        const usages: Array<{
+          tag: string;
+          attribute: string;
+          selector: string;
+          text?: string;
+        }> = [];
+        const matches = buildMatchers(url);
+        const seen = new Set<Element>();
+
+        const push = (
+          el: Element,
+          attribute: string,
+          text?: string,
+        ) => {
+          if (seen.has(el)) {
+            // Allow multiple distinct attributes per element.
+          } else {
+            seen.add(el);
+          }
+          usages.push({
+            tag: el.tagName.toLowerCase(),
+            attribute,
+            selector: selectorFor(el),
+            text: text?.slice(0, 80),
+          });
+        };
+
+        try {
+          // <img src> / <iframe src> / <source src/srcset> / <video src/poster>
+          const tagged = document.querySelectorAll(
+            'img[src], img[srcset], iframe[src], source[src], source[srcset], video[src], video[poster], audio[src], embed[src]',
+          );
+          for (let i = 0; i < tagged.length; i++) {
+            const el = tagged[i];
+            const attrs = ['src', 'srcset', 'poster'];
+            for (const a of attrs) {
+              const v = el.getAttribute(a);
+              if (v && anyMatch(v, matches)) push(el, a);
+            }
+          }
+          // <link href>
+          const links = document.querySelectorAll('link[href]');
+          for (let i = 0; i < links.length; i++) {
+            const el = links[i];
+            const v = el.getAttribute('href');
+            if (v && anyMatch(v, matches)) push(el, 'href');
+          }
+          // Inline style background-image
+          const styled = document.querySelectorAll('[style*="background"]');
+          for (let i = 0; i < styled.length; i++) {
+            const el = styled[i];
+            const s = el.getAttribute('style') || '';
+            if (anyMatch(s, matches)) push(el, 'style[background-image]', s);
+          }
+          // Computed style background-image for the first 200 candidates
+          // (full scan is too slow on big pages — limit to elements that
+          // visually have a background).
+          if (usages.length < 20) {
+            const all = document.body.getElementsByTagName('*');
+            const limit = Math.min(all.length, 800);
+            let probes = 0;
+            for (let i = 0; i < limit && probes < 200; i++) {
+              const el = all[i] as HTMLElement;
+              try {
+                const cs = getComputedStyle(el);
+                const bg = cs.backgroundImage;
+                if (bg && bg !== 'none') {
+                  probes += 1;
+                  if (anyMatch(bg, matches)) {
+                    push(el, 'computed background-image', bg);
+                  }
+                }
+              } catch {
+                /* cross-origin frames etc */
+              }
+            }
+          }
+        } catch {
+          /* swallow — partial results are still useful */
+        }
+
+        return { ok: true, usages };
       },
     };
 

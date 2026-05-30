@@ -191,6 +191,34 @@ export async function callPrimeLazyLoad(
   return null; // timed out
 }
 
+/**
+ * Asks the main world to enumerate every DOM site that references the given
+ * asset URL — <img src>, <link href>, inline style background-image, etc.
+ * Used by the Modules tab's image detail view to answer "where is this
+ * image used on the page?".
+ */
+export async function callFindAssetUsages(url: string): Promise<
+  Array<{ tag: string; attribute: string; selector: string; text?: string }>
+> {
+  // JSON.stringify(url) is safe interpolation for an arbitrary string.
+  const expr = `(function(){
+    if (!window.__dom_lens__ || typeof window.__dom_lens__.findAssetUsages !== 'function') {
+      return JSON.stringify({ ok: false });
+    }
+    try { return JSON.stringify(window.__dom_lens__.findAssetUsages(${JSON.stringify(url)})); }
+    catch (e) { return JSON.stringify({ ok: false, error: (e && e.message) || String(e) }); }
+  })()`;
+  const res = await inspectedEval<string>(expr);
+  if (res.isError || typeof res.value !== 'string') return [];
+  try {
+    const parsed = JSON.parse(res.value);
+    if (!parsed?.ok) return [];
+    return Array.isArray(parsed.usages) ? parsed.usages : [];
+  } catch {
+    return [];
+  }
+}
+
 export async function callGetScrollPosition(): Promise<{ x: number; y: number } | null> {
   const res = await inspectedEval<string>(
     `(function(){ try { return JSON.stringify(window.__dom_lens__ ? window.__dom_lens__.getScrollPosition() : null); } catch(e) { return 'null'; } })()`,
