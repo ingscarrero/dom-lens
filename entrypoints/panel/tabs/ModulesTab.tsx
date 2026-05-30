@@ -4,16 +4,20 @@ import { summarizeModules } from '@/lib/modules/classify';
 import { fetchAndParseSourceMap, formatBytes, topLeaves } from '@/lib/modules/sourcemap';
 import { viewerFor } from '@/lib/modules/viewers';
 import { buildReformatPayload, parseReformatResponse, languageLabel } from '@/lib/modules/reformat';
-import { callFindAssetUsages } from '../hooks/useInspectedEval';
+import { extractSkeleton, symbolLabel, type Skeleton, type SkeletonSymbol } from '@/lib/modules/skeleton';
+import { buildSymbolSummaryPayload } from '@/lib/modules/summarizeSymbol';
+import { callFindAssetUsages, callScrollToSelector } from '../hooks/useInspectedEval';
 import type { LoadedModule, ParsedSourceMap, SourceFileNode } from '@/lib/modules/types';
 import type { OneshotProxy } from '@/lib/lm-studio/oneshotProxy';
+import type { StreamingOneshot } from '@/lib/lm-studio/streamingProxy';
 
 interface Props {
   fetchText: (url: string) => Promise<string>;
   oneshot: OneshotProxy;
+  streamingOneshot: StreamingOneshot;
 }
 
-export default function ModulesTab({ fetchText, oneshot }: Props) {
+export default function ModulesTab({ fetchText, oneshot, streamingOneshot }: Props) {
   const snap = useStore((s) => s.snapshot);
   const [openId, setOpenId] = useState<string | null>(null);
   const [kindFilter, setKindFilter] = useState<string>('all');
@@ -162,6 +166,7 @@ export default function ModulesTab({ fetchText, oneshot }: Props) {
                           module={m}
                           fetchText={fetchText}
                           oneshot={oneshot}
+                          streamingOneshot={streamingOneshot}
                         />
                       </td>
                     </tr>
@@ -189,16 +194,25 @@ function ModuleDetail({
   module,
   fetchText,
   oneshot,
+  streamingOneshot,
 }: {
   module: LoadedModule;
   fetchText: (url: string) => Promise<string>;
   oneshot: OneshotProxy;
+  streamingOneshot: StreamingOneshot;
 }) {
   const spec = viewerFor(module.classification.chunkKind);
   switch (spec.family) {
     case 'js':
     case 'style':
-      return <CodeModuleDetail module={module} fetchText={fetchText} oneshot={oneshot} />;
+      return (
+        <CodeModuleDetail
+          module={module}
+          fetchText={fetchText}
+          oneshot={oneshot}
+          streamingOneshot={streamingOneshot}
+        />
+      );
     case 'data':
       return <DataModuleDetail module={module} fetchText={fetchText} oneshot={oneshot} />;
     case 'image':
@@ -218,35 +232,56 @@ function ModuleDetail({
   }
 }
 
-/* ---------- Code modules: sourcemap-first, LLM-reformat fallback ---------- */
+/* ---------- Code modules: sourcemap-first, skeleton + symbol-summarize fallback ---------- */
+
+/**
+ * The code-module detail goes through three phases:
+ *
+ *   1. Try the sourcemap. If a .map is present, show the existing
+ *      hierarchical source tree.
+ *   2. Otherwise (the common case for production minified bundles), fetch
+ *      the raw source ONCE and build a regex/heuristic skeleton —
+ *      webpack modules, imports, exports, top-level fns/classes. This is
+ *      instant and gives the user a navigable outline.
+ *   3. Per symbol, the user can ask the LLM to summarise just that range
+ *      — a small, focused, streaming call. Far faster and more useful
+ *      than "reformat 1MB of minified JS" which takes minutes and yields
+ *      something nobody can read.
+ *
+ *   For users who DO want a full beautify (smaller modules, a quick
+ *   download), a separate "Beautify whole file" button streams the LLM
+ *   output into a code viewer with download support.
+ */
 
 type CodeState =
-  | { phase: 'idle' }
   | { phase: 'fetching-map' }
   | { phase: 'has-map'; map: ParsedSourceMap }
   | { phase: 'no-map'; reason: string }
-  | { phase: 'fetching-source' }
-  | { phase: 'reformatting' }
-  | { phase: 'reformatted'; code: string }
+  | { phase: 'mapping'; progress: string }
+  | { phase: 'mapped'; source: string; skeleton: Skeleton }
   | { phase: 'error'; message: string };
 
 function CodeModuleDetail({
   module,
   fetchText,
   oneshot,
+  streamingOneshot,
 }: {
   module: LoadedModule;
   fetchText: (url: string) => Promise<string>;
   oneshot: OneshotProxy;
+  streamingOneshot: StreamingOneshot;
 }) {
   const settings = useStore((s) => s.settings);
   const spec = viewerFor(module.classification.chunkKind);
   const language = spec.reformatLanguage ?? 'javascript';
-  const [state, setState] = useState<CodeState>({ phase: 'idle' });
+  const family = (spec.family === 'js' ? 'js' : spec.family === 'style' ? 'style' : 'other') as
+    | 'js'
+    | 'style'
+    | 'other';
+  const [state, setState] = useState<CodeState>({ phase: 'fetching-map' });
+  const [beautify, setBeautify] = useState<BeautifyState>({ phase: 'idle' });
 
-  // On mount, try to fetch + parse the sourcemap. Failure is expected for
-  // a lot of modules — we surface a clear reason and offer the LLM-reformat
-  // fallback.
   useEffect(() => {
     let cancelled = false;
     setState({ phase: 'fetching-map' });
@@ -266,33 +301,51 @@ function CodeModuleDetail({
     };
   }, [module.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const runReformat = async () => {
-    setState({ phase: 'fetching-source' });
+  const runMapModule = async () => {
+    setState({ phase: 'mapping', progress: 'Fetching source…' });
     let source: string;
     try {
       source = await fetchText(module.url);
     } catch (e) {
-      setState({ phase: 'error', message: 'Could not fetch source: ' + (e instanceof Error ? e.message : String(e)) });
+      setState({
+        phase: 'error',
+        message: 'Could not fetch source: ' + (e instanceof Error ? e.message : String(e)),
+      });
       return;
     }
-    setState({ phase: 'reformatting' });
-    const payload = buildReformatPayload(source, language, settings, {
-      url: module.url,
-      bytes: module.transferredBytes,
-    });
-    const res = await oneshot(payload);
-    if (!res.ok) {
-      setState({ phase: 'error', message: res.message });
+    setState({ phase: 'mapping', progress: 'Extracting skeleton…' });
+    // Defer so React can paint the "Extracting…" state before we block
+    // on the regex pass (which can take ~200ms on a 1MB minified file).
+    await new Promise((r) => setTimeout(r, 0));
+    const skeleton = extractSkeleton(source, family);
+    if (!skeleton) {
+      setState({
+        phase: 'error',
+        message: 'No skeleton extractor for this kind.',
+      });
       return;
     }
-    const code = parseReformatResponse(res.text, language);
-    setState({ phase: 'reformatted', code });
+    setState({ phase: 'mapped', source, skeleton });
   };
 
   return (
     <div className="rounded border border-panel-border bg-slate-900/40 p-2">
-      <div className="mb-1 text-[10px] uppercase tracking-wide text-panel-muted">
-        {spec.label} · {languageLabel(language)}
+      <div className="mb-2 flex items-center justify-between">
+        <div className="text-[10px] uppercase tracking-wide text-panel-muted">
+          {spec.label} · {languageLabel(language)}
+        </div>
+        {state.phase === 'no-map' || state.phase === 'mapped' ? (
+          <BeautifyButton
+            module={module}
+            language={language}
+            beautify={beautify}
+            setBeautify={setBeautify}
+            fetchText={fetchText}
+            oneshot={oneshot}
+            streamingOneshot={streamingOneshot}
+            sourcePrefetched={state.phase === 'mapped' ? state.source : null}
+          />
+        ) : null}
       </div>
 
       {state.phase === 'fetching-map' && (
@@ -301,43 +354,329 @@ function CodeModuleDetail({
 
       {state.phase === 'has-map' && <SourceMapDetail map={state.map} />}
 
-      {(state.phase === 'no-map' ||
-        state.phase === 'fetching-source' ||
-        state.phase === 'reformatting' ||
-        state.phase === 'reformatted' ||
-        state.phase === 'error') && (
+      {state.phase === 'no-map' && (
         <div>
-          {state.phase === 'no-map' && (
-            <div className="mb-2 text-[11px] text-amber-200/90">
-              No sourcemap available for this module ({state.reason}). You can
-              still ask the local LLM to beautify the minified source.
-            </div>
-          )}
-          {state.phase === 'error' && (
-            <div className="mb-2 text-[11px] text-red-300">{state.message}</div>
-          )}
+          <div className="mb-2 text-[11px] text-amber-200/90">
+            No sourcemap available ({state.reason}). Map the module to get a
+            navigable skeleton — then summarise individual symbols on demand.
+          </div>
           <button
             type="button"
-            disabled={state.phase === 'fetching-source' || state.phase === 'reformatting' || !settings.baseUrl}
-            onClick={() => void runReformat()}
-            className="rounded border border-panel-accent/60 bg-panel-accent/10 px-2 py-0.5 text-[10px] font-medium text-panel-accent hover:bg-panel-accent/20 disabled:cursor-not-allowed disabled:border-panel-border disabled:bg-transparent disabled:text-panel-muted"
-            title={!settings.baseUrl ? 'Configure a local LLM in Settings first.' : ''}
+            onClick={() => void runMapModule()}
+            className="rounded border border-panel-accent/60 bg-panel-accent/10 px-2 py-0.5 text-[10px] font-medium text-panel-accent hover:bg-panel-accent/20"
           >
-            {state.phase === 'fetching-source'
-              ? 'Fetching source…'
-              : state.phase === 'reformatting'
-                ? 'Asking LLM…'
-                : state.phase === 'reformatted'
-                  ? '✨ Reformat again'
-                  : '✨ Reformat with AI'}
+            🗺 Map module
           </button>
-          {state.phase === 'reformatted' && (
-            <pre className="scrollbar-thin mt-2 max-h-96 overflow-auto rounded border border-panel-border bg-black/40 p-2 font-mono text-[11px] leading-snug text-panel-text">
-              <code>{state.code}</code>
-            </pre>
-          )}
         </div>
       )}
+
+      {state.phase === 'mapping' && (
+        <div className="text-[11px] text-panel-muted">{state.progress}</div>
+      )}
+
+      {state.phase === 'error' && (
+        <div className="text-[11px] text-red-300">{state.message}</div>
+      )}
+
+      {state.phase === 'mapped' && (
+        <SkeletonView
+          module={module}
+          source={state.source}
+          skeleton={state.skeleton}
+          streamingOneshot={streamingOneshot}
+        />
+      )}
+
+      <BeautifyPanel state={beautify} />
+    </div>
+  );
+}
+
+/* ---------- Skeleton view: navigable outline + per-symbol summarize ---------- */
+
+function SkeletonView({
+  module,
+  source,
+  skeleton,
+  streamingOneshot,
+}: {
+  module: LoadedModule;
+  source: string;
+  skeleton: Skeleton;
+  streamingOneshot: StreamingOneshot;
+}) {
+  const settings = useStore((s) => s.settings);
+  const [filter, setFilter] = useState('');
+  const [summaries, setSummaries] = useState<Record<number, SymbolSummary>>({});
+  const groups = useMemo(() => {
+    const out = new Map<SkeletonSymbol['kind'], SkeletonSymbol[]>();
+    for (const s of skeleton.symbols) {
+      const list = out.get(s.kind) ?? [];
+      list.push(s);
+      out.set(s.kind, list);
+    }
+    return Array.from(out.entries());
+  }, [skeleton]);
+
+  const isMinified = useMemo(() => isProbablyMinified(source), [source]);
+
+  const runSummary = (idx: number, symbol: SkeletonSymbol) => {
+    const payload = buildSymbolSummaryPayload(symbol, source, settings, {
+      moduleUrl: module.url,
+      isMinified,
+    });
+    setSummaries((prev) => ({ ...prev, [idx]: { state: 'streaming', text: '' } }));
+    let acc = '';
+    const handle = streamingOneshot(payload, (delta) => {
+      acc += delta;
+      setSummaries((prev) => ({ ...prev, [idx]: { state: 'streaming', text: acc } }));
+    });
+    handle.result
+      .then((full) => {
+        setSummaries((prev) => ({ ...prev, [idx]: { state: 'done', text: full } }));
+      })
+      .catch((e) => {
+        setSummaries((prev) => ({
+          ...prev,
+          [idx]: { state: 'error', text: acc, error: e instanceof Error ? e.message : String(e) },
+        }));
+      });
+  };
+
+  return (
+    <div>
+      <div className="mb-2 flex items-center gap-2 text-[10px] uppercase tracking-wide text-panel-muted">
+        <span>{skeleton.symbols.length} symbols extracted</span>
+        {skeleton.language === 'javascript' && skeleton.isWebpackBundle && (
+          <span className="rounded bg-violet-500/20 px-1 text-violet-200">
+            webpack ({skeleton.moduleCount} modules)
+          </span>
+        )}
+        {skeleton.language === 'javascript' && skeleton.isVite && (
+          <span className="rounded bg-emerald-500/20 px-1 text-emerald-200">vite</span>
+        )}
+        {isMinified && (
+          <span className="rounded bg-slate-700/40 px-1 text-panel-muted">minified</span>
+        )}
+        <input
+          type="text"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="Filter symbols…"
+          className="ml-auto rounded border border-panel-border bg-panel-bg px-2 py-0.5 text-[11px] normal-case text-panel-text"
+        />
+      </div>
+
+      <div className="max-h-[420px] overflow-auto">
+        {groups.map(([kind, syms]) => {
+          const visible = syms.filter((s) =>
+            !filter ? true : s.name.toLowerCase().includes(filter.toLowerCase()),
+          );
+          if (visible.length === 0) return null;
+          return (
+            <div key={kind} className="mb-2">
+              <div className="mb-1 text-[10px] uppercase tracking-wide text-panel-muted">
+                {kind} ({visible.length})
+              </div>
+              <ul className="space-y-0.5">
+                {visible.slice(0, 80).map((s) => {
+                  const idx = skeleton.symbols.indexOf(s);
+                  const sum = summaries[idx];
+                  return (
+                    <li
+                      key={idx}
+                      className="rounded border border-panel-border/30 bg-panel-bg/30 p-1.5"
+                    >
+                      <div className="flex items-baseline justify-between gap-2 text-[11px]">
+                        <span className="break-all font-mono">{symbolLabel(s)}</span>
+                        <span className="shrink-0 font-mono text-[10px] text-panel-muted">
+                          {formatBytes(s.end - s.start)}
+                        </span>
+                      </div>
+                      {s.preview && (
+                        <div className="mt-0.5 truncate font-mono text-[10px] text-panel-muted">
+                          {s.preview}
+                        </div>
+                      )}
+                      {sum ? (
+                        <div
+                          className={
+                            'mt-1 rounded border px-1.5 py-1 text-[11px] ' +
+                            (sum.state === 'error'
+                              ? 'border-red-500/40 bg-red-500/10 text-red-200'
+                              : 'border-panel-border bg-black/30 text-panel-text')
+                          }
+                        >
+                          {sum.text || (sum.state === 'streaming' ? '…' : '')}
+                          {sum.state === 'streaming' && (
+                            <span className="ml-0.5 inline-block animate-pulse">▍</span>
+                          )}
+                          {sum.state === 'error' && (
+                            <div className="mt-1 text-[10px]">{sum.error}</div>
+                          )}
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => runSummary(idx, s)}
+                          disabled={!settings.baseUrl}
+                          className="mt-1 text-[10px] text-panel-accent hover:text-sky-300 disabled:text-panel-muted"
+                          title={
+                            !settings.baseUrl
+                              ? 'Configure a local LLM in Settings first.'
+                              : ''
+                          }
+                        >
+                          ✨ Summarize symbol
+                        </button>
+                      )}
+                    </li>
+                  );
+                })}
+                {visible.length > 80 && (
+                  <li className="text-[11px] text-panel-muted">
+                    …and {visible.length - 80} more. Filter to narrow.
+                  </li>
+                )}
+              </ul>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+interface SymbolSummary {
+  state: 'streaming' | 'done' | 'error';
+  text: string;
+  error?: string;
+}
+
+function isProbablyMinified(source: string): boolean {
+  // Heuristic: average characters per line. Minified files routinely sit
+  // above 200 chars/line; readable code is usually under 80.
+  const lines = source.split('\n');
+  if (lines.length < 5) return source.length > 1000;
+  const avg = source.length / lines.length;
+  return avg > 200;
+}
+
+/* ---------- Beautify whole file (opt-in streaming) ---------- */
+
+type BeautifyState =
+  | { phase: 'idle' }
+  | { phase: 'streaming'; chars: number; downloadUrl?: string }
+  | { phase: 'done'; downloadUrl: string }
+  | { phase: 'error'; message: string };
+
+function BeautifyButton({
+  module,
+  language,
+  beautify,
+  setBeautify,
+  fetchText,
+  oneshot,
+  streamingOneshot,
+  sourcePrefetched,
+}: {
+  module: LoadedModule;
+  language: import('@/lib/modules/reformat').ReformatLanguage;
+  beautify: BeautifyState;
+  setBeautify: (s: BeautifyState) => void;
+  fetchText: (url: string) => Promise<string>;
+  oneshot: OneshotProxy;
+  streamingOneshot: StreamingOneshot;
+  sourcePrefetched: string | null;
+}) {
+  const settings = useStore((s) => s.settings);
+  const busy = beautify.phase === 'streaming';
+
+  const run = async () => {
+    setBeautify({ phase: 'streaming', chars: 0 });
+    let source = sourcePrefetched;
+    if (source === null) {
+      try {
+        source = await fetchText(module.url);
+      } catch (e) {
+        setBeautify({
+          phase: 'error',
+          message: 'Could not fetch source: ' + (e instanceof Error ? e.message : String(e)),
+        });
+        return;
+      }
+    }
+    const payload = buildReformatPayload(source, language, settings, {
+      url: module.url,
+      bytes: module.transferredBytes,
+    });
+    let acc = '';
+    const handle = streamingOneshot(payload, (delta) => {
+      acc += delta;
+      setBeautify({ phase: 'streaming', chars: acc.length });
+    });
+    try {
+      const full = await handle.result;
+      const code = parseReformatResponse(full, language);
+      const blob = new Blob([code], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      setBeautify({ phase: 'done', downloadUrl: url });
+    } catch (e) {
+      setBeautify({
+        phase: 'error',
+        message: e instanceof Error ? e.message : String(e),
+      });
+    }
+    // oneshot import is kept on the props surface so we can swap back if
+    // a future, smaller-payload flow needs non-streaming reformat.
+    void oneshot;
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={() => void run()}
+      disabled={busy || !settings.baseUrl}
+      className="rounded border border-panel-border bg-panel-bg/60 px-2 py-0.5 text-[10px] text-panel-muted hover:text-white disabled:cursor-not-allowed"
+      title={
+        !settings.baseUrl
+          ? 'Configure a local LLM in Settings first.'
+          : 'Stream a full beautify of this file. Slow for large bundles — prefer Map module + Summarize symbol.'
+      }
+    >
+      {busy ? `Beautifying… ${formatBytes(beautify.chars)}` : '⤓ Beautify whole file'}
+    </button>
+  );
+}
+
+function BeautifyPanel({ state }: { state: BeautifyState }) {
+  if (state.phase === 'idle') return null;
+  if (state.phase === 'streaming') {
+    return (
+      <div className="mt-2 rounded border border-panel-border bg-black/30 px-2 py-1 text-[11px] text-panel-muted">
+        Streaming beautified output… {formatBytes(state.chars)} received.
+      </div>
+    );
+  }
+  if (state.phase === 'error') {
+    return (
+      <div className="mt-2 rounded border border-red-500/40 bg-red-500/10 px-2 py-1 text-[11px] text-red-200">
+        Beautify failed: {state.message}
+      </div>
+    );
+  }
+  return (
+    <div className="mt-2 flex items-center justify-between rounded border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-[11px] text-emerald-200">
+      <span>Beautified output ready.</span>
+      <a
+        href={state.downloadUrl}
+        download="dom-lens-beautified.txt"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="rounded border border-emerald-500/40 px-1.5 py-0.5 text-[10px] hover:bg-emerald-500/20"
+      >
+        ⬇ Download
+      </a>
     </div>
   );
 }
@@ -434,8 +773,22 @@ function ImageModuleDetail({ module }: { module: LoadedModule }) {
             <ul className="space-y-1 text-[11px]">
               {usages.slice(0, 20).map((u, i) => (
                 <li key={i} className="break-words">
-                  <span className="font-mono text-panel-text/90">{u.selector}</span>
-                  <span className="ml-1 text-panel-muted">[{u.attribute}]</span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void callScrollToSelector(u.selector, {
+                        label: `${u.tag}[${u.attribute}]`,
+                        color: '#0ea5e9',
+                      })
+                    }
+                    className="text-left hover:bg-panel-surface/40"
+                    title="Scroll the inspected page to this element and highlight it"
+                  >
+                    <span className="font-mono text-panel-accent hover:text-sky-300">
+                      {u.selector}
+                    </span>
+                    <span className="ml-1 text-panel-muted">[{u.attribute}]</span>
+                  </button>
                 </li>
               ))}
               {usages.length > 20 && (

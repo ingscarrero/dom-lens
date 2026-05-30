@@ -16,6 +16,7 @@ import { runEnhanceStitch } from './enhanceFlow';
 import { callClearHighlight, callHighlight } from './hooks/useInspectedEval';
 import { createFetchProxy } from '@/lib/modules/fetchProxy';
 import { createOneshotProxy } from '@/lib/lm-studio/oneshotProxy';
+import { createStreamingProxy, type StreamHandlers } from '@/lib/lm-studio/streamingProxy';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'snapshot', label: 'Snapshot' },
@@ -56,6 +57,8 @@ export default function App() {
   const netFetchWaitersRef = useRef(new Map<string, NetFetchResolver>());
   // Track in-flight lm.oneshot promises by requestId
   const oneshotWaitersRef = useRef(new Map<string, OneshotResolver>());
+  // Track streaming lm.stream handlers by requestId
+  const streamHandlersRef = useRef(new Map<string, StreamHandlers>());
 
   const port = usePort((msg: BgToPanel) => {
     if (msg.type === 'capture.tile.result') {
@@ -80,6 +83,12 @@ export default function App() {
         if (msg.ok) waiter({ ok: true, text: msg.text });
         else waiter({ ok: false, message: msg.message });
       }
+    } else if (msg.type === 'lm.stream.delta') {
+      streamHandlersRef.current.get(msg.requestId)?.onDelta(msg.text);
+    } else if (msg.type === 'lm.stream.done') {
+      streamHandlersRef.current.get(msg.requestId)?.onDone(msg.fullText);
+    } else if (msg.type === 'lm.stream.error') {
+      streamHandlersRef.current.get(msg.requestId)?.onError(msg.message);
     } else if (msg.type === 'lm.chat.delta') {
       appendChatDelta(msg.text);
     } else if (msg.type === 'lm.chat.done') {
@@ -109,6 +118,13 @@ export default function App() {
       new Promise((resolve) => {
         oneshotWaitersRef.current.set(requestId, resolve);
       }),
+  });
+
+  const streamingOneshot = createStreamingProxy({
+    post: (m) => port.post(m),
+    registerHandlers: (requestId, handlers) =>
+      streamHandlersRef.current.set(requestId, handlers),
+    unregisterHandlers: (requestId) => streamHandlersRef.current.delete(requestId),
   });
 
   useEffect(() => {
@@ -182,7 +198,7 @@ export default function App() {
       <header className="flex items-center justify-between border-b border-panel-border bg-panel-surface px-3 py-2">
         <div className="flex items-center gap-2">
           <span className="text-sm font-semibold">DOM Lens</span>
-          <span className="text-xs text-panel-muted">v0.3.6</span>
+          <span className="text-xs text-panel-muted">v0.3.7</span>
         </div>
         <div className="flex items-center gap-2">
           {capturing && captureProgress && (
@@ -245,7 +261,13 @@ export default function App() {
         )}
         {tab === 'components' && <ComponentsTab />}
         {tab === 'federation' && <FederationTab />}
-        {tab === 'modules' && <ModulesTab fetchText={fetchText} oneshot={oneshot} />}
+        {tab === 'modules' && (
+          <ModulesTab
+            fetchText={fetchText}
+            oneshot={oneshot}
+            streamingOneshot={streamingOneshot}
+          />
+        )}
         {tab === 'insights' && (
           <InsightsTab
             setTab={setTab}

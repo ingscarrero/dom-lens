@@ -219,6 +219,38 @@ export async function callFindAssetUsages(url: string): Promise<
   }
 }
 
+/**
+ * Drives the main world to scroll an element matching `selector` into view
+ * and paint the existing highlight overlay around it. Used by the Modules
+ * tab to "go to" a DOM usage site of an image asset.
+ */
+export async function callScrollToSelector(
+  selector: string,
+  opts?: { label?: string; color?: string },
+): Promise<{ ok: boolean; reason?: string }> {
+  const expr = `(function(){
+    if (!window.__dom_lens__ || typeof window.__dom_lens__.scrollToSelector !== 'function') {
+      return JSON.stringify({ ok: false, reason: 'api-missing' });
+    }
+    try {
+      return JSON.stringify(window.__dom_lens__.scrollToSelector(
+        ${JSON.stringify(selector)},
+        ${JSON.stringify(opts ?? {})}
+      ));
+    } catch (e) {
+      return JSON.stringify({ ok: false, reason: (e && e.message) || String(e) });
+    }
+  })()`;
+  const res = await inspectedEval<string>(expr);
+  if (res.isError || typeof res.value !== 'string') return { ok: false, reason: 'eval failed' };
+  try {
+    const parsed = JSON.parse(res.value);
+    return { ok: !!parsed.ok, reason: parsed.reason };
+  } catch {
+    return { ok: false, reason: 'parse failed' };
+  }
+}
+
 export async function callGetScrollPosition(): Promise<{ x: number; y: number } | null> {
   const res = await inspectedEval<string>(
     `(function(){ try { return JSON.stringify(window.__dom_lens__ ? window.__dom_lens__.getScrollPosition() : null); } catch(e) { return 'null'; } })()`,

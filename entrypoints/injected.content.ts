@@ -58,6 +58,14 @@ interface DomLensApi {
       text?: string;
     }>;
   };
+  /** Scroll the matching element into view + paint the existing highlight
+   * overlay around it. Returns the element's viewport-relative rect when
+   * matched. The caller hands us a CSS selector that came from
+   * findAssetUsages — we re-resolve so cross-tab selector edits don't
+   * stick. */
+  scrollToSelector(selector: string, opts?: { label?: string; color?: string }):
+    | { ok: true; rect: { x: number; y: number; w: number; h: number } }
+    | { ok: false; reason: string };
 }
 
 export default defineContentScript({
@@ -414,7 +422,7 @@ export default defineContentScript({
     }
 
     const api: DomLensApi = {
-      version: '0.3.6',
+      version: '0.3.7',
       capture(opts) {
         return runCapture(consoleBuffer, {
           maxMarkdownChars: opts?.maxMarkdownChars ?? 20000,
@@ -563,6 +571,49 @@ export default defineContentScript({
       },
       getPrimeLazyLoadStatus() {
         return primeState;
+      },
+      scrollToSelector(selector, opts) {
+        let el: Element | null = null;
+        try {
+          el = document.querySelector(selector);
+        } catch {
+          return { ok: false, reason: 'invalid selector' };
+        }
+        if (!el) return { ok: false, reason: 'no element matches selector' };
+        try {
+          (el as HTMLElement).scrollIntoView({
+            block: 'center',
+            inline: 'center',
+            behavior: 'instant' as ScrollBehavior,
+          });
+        } catch {
+          try {
+            (el as HTMLElement).scrollIntoView();
+          } catch {
+            /* ignore */
+          }
+        }
+        const r = (el as HTMLElement).getBoundingClientRect();
+        const docX = r.left + window.scrollX;
+        const docY = r.top + window.scrollY;
+        // Reuse the existing highlight overlay machinery — it positions in
+        // document coordinates so the rect persists across small scrolls.
+        const el2 = ensureHighlightEl();
+        el2.style.left = docX + 'px';
+        el2.style.top = docY + 'px';
+        el2.style.width = r.width + 'px';
+        el2.style.height = r.height + 'px';
+        el2.style.display = 'block';
+        if (opts?.color) {
+          el2.style.borderColor = opts.color;
+          el2.style.background = opts.color + '30';
+        }
+        const labelEl = document.getElementById(HIGHLIGHT_ID + '_label');
+        if (labelEl) labelEl.textContent = opts?.label ?? '';
+        return {
+          ok: true,
+          rect: { x: docX, y: docY, w: r.width, h: r.height },
+        };
       },
       findAssetUsages(url) {
         // Trims protocol/host so a relative match still wins. We compare on

@@ -95,6 +95,48 @@ export default defineBackground({
             activeStreams.delete(msg.requestId);
             return;
           }
+          if (msg.type === 'lm.stream') {
+            // Like lm.oneshot but the SW forwards every delta to the panel
+            // for live progress. The panel routes deltas on requestId so
+            // multiple symbol-level summaries can run concurrently without
+            // crossing wires (we don't currently parallelize, but the API
+            // shape allows it).
+            const controller = new AbortController();
+            activeStreams.set(msg.requestId, controller);
+            let acc = '';
+            try {
+              for await (const chunk of chatStream(msg.payload, controller.signal)) {
+                if (chunk.delta) {
+                  acc += chunk.delta;
+                  send({ type: 'lm.stream.delta', requestId: msg.requestId, text: chunk.delta });
+                }
+                if (chunk.done) break;
+              }
+              send({ type: 'lm.stream.done', requestId: msg.requestId, fullText: acc });
+            } catch (e: any) {
+              if (e?.name === 'AbortError') {
+                send({
+                  type: 'lm.stream.error',
+                  requestId: msg.requestId,
+                  message: 'cancelled',
+                });
+              } else {
+                send({
+                  type: 'lm.stream.error',
+                  requestId: msg.requestId,
+                  message: e?.message ?? String(e),
+                });
+              }
+            } finally {
+              activeStreams.delete(msg.requestId);
+            }
+            return;
+          }
+          if (msg.type === 'lm.stream.cancel') {
+            activeStreams.get(msg.requestId)?.abort();
+            activeStreams.delete(msg.requestId);
+            return;
+          }
           if (msg.type === 'lm.oneshot') {
             // Same as lm.chat.start but the panel doesn't want streaming —
             // accumulate the deltas server-side and reply with the full
