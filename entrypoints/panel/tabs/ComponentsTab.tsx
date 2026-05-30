@@ -2,13 +2,18 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Tree, type NodeApi, type NodeRendererProps } from 'react-arborist';
 import { useStore } from '../store';
 import type { ComponentNode } from '@/lib/react/fiberToTree';
-import { callScrollToBounds } from '../hooks/useInspectedEval';
+import {
+  callScrollToBounds,
+  callInspectAtBounds,
+  type InspectedRegion,
+} from '../hooks/useInspectedEval';
 import { cropRegion } from '@/lib/snapshot/cropRegion';
 import {
   UX_PRESETS,
   buildUxVisionPayload,
   customPromptId,
   customPromptLabel,
+  describeInputs,
   type UxPreset,
 } from '@/lib/components/uxVisionPrompts';
 import { useLlm } from '@/lib/lm-studio/LlmContext';
@@ -164,16 +169,35 @@ export default function ComponentsTab() {
   const llmConfigured = !!settings.baseUrl && !!settings.model;
   // UX-vision analysis state: each run lands in a tab; same id replaces.
   const [analyses, setAnalyses] = useState<
-    Record<string, { label: string; icon: string; text: string; state: 'streaming' | 'done' | 'error'; error?: string }>
+    Record<
+      string,
+      {
+        label: string;
+        icon: string;
+        text: string;
+        state: 'streaming' | 'done' | 'error';
+        error?: string;
+        /** Cropped PNG sent to the model (dataURL). */
+        imageDataUrl?: string;
+        /** Pixel dims of the crop. */
+        imageDims?: { w: number; h: number };
+        /** Bytes (approx) of the encoded PNG. */
+        imageBytes?: number;
+        /** DOM context bundled into the prompt. */
+        domContext?: InspectedRegion | null;
+        /** Human-readable bullets of what was sent. */
+        inputs?: string[];
+      }
+    >
   >({});
-  const [activeTab, setActiveTab] = useState<string>('components');
+  const [activeTab, setActiveTab] = useState<string>('tree');
   const [customOpen, setCustomOpen] = useState(false);
   const [customPrompt, setCustomPrompt] = useState('');
 
   // When the snapshot changes (new capture), reset analyses + selection.
   useEffect(() => {
     setAnalyses({});
-    setActiveTab('components');
+    setActiveTab('tree');
     setSelected(null);
     setCustomOpen(false);
     setCustomPrompt('');
@@ -183,58 +207,121 @@ export default function ComponentsTab() {
     preset: UxPreset | { id: string; customPrompt: string; label: string; icon: string },
   ) => {
     if (!llm || !snap?.screenshot || !selected?.bounds) return;
-    // Crop the selected region from the snapshot screenshot.
+    const isCustom = 'customPrompt' in preset;
+    const tabId = preset.id;
+    const label = preset.label;
+    const icon = preset.icon;
+    const boundsLabel = `${Math.round(selected.bounds.w)}×${Math.round(selected.bounds.h)} at (${Math.round(selected.bounds.x)},${Math.round(selected.bounds.y)})`;
+
+    // Show the "preparing" state immediately + jump to the tab so the
+    // user sees progress while we collect context + crop the image.
+    setAnalyses((a) => ({
+      ...a,
+      [tabId]: { label, icon, text: '', state: 'streaming' },
+    }));
+    setActiveTab(tabId);
+
+    // 1. Inspect the live DOM at the bounds centre. Best-effort —
+    //    failures (cross-origin, off-screen, etc.) just mean we ship
+    //    the prompt without DOM context, the image is still useful.
+    let domContext: InspectedRegion | null = null;
+    try {
+      domContext = await callInspectAtBounds(
+        selected.bounds.x,
+        selected.bounds.y,
+        selected.bounds.w,
+        selected.bounds.h,
+      );
+    } catch (e) {
+      console.warn('[DOM Lens] inspectAtBounds failed', e);
+    }
+
+    // 2. Crop the region from the snapshot screenshot. When bounds are
+    //    off-screen, cropRegion returns null and we fall back to the
+    //    full image so the model still has something to look at.
     let imageDataUrl: string | null = null;
     try {
       imageDataUrl = await cropRegion(snap.screenshot, selected.bounds, { pad: 16 });
     } catch (e) {
       console.warn('[DOM Lens] cropRegion failed', e);
     }
-    if (!imageDataUrl) {
-      // Bounds outside the captured screenshot — fall back to the full
-      // image so the model still has SOMETHING to look at.
-      imageDataUrl = snap.screenshot.dataUrl;
-    }
-    const isCustom = 'customPrompt' in preset;
-    const tabId = preset.id;
-    const label = preset.label;
-    const icon = preset.icon;
+    if (!imageDataUrl) imageDataUrl = snap.screenshot.dataUrl;
+
+    // Derive crop dims + size for the inputs panel.
+    const imgDims = await measureDataUrl(imageDataUrl);
+    const imageBytes = approxDataUrlBytes(imageDataUrl);
+
+    const inputs = describeInputs({
+      imageBytes,
+      imageDims: imgDims ?? undefined,
+      domContext,
+      componentName: selected.name,
+      componentKind: selected.kind,
+      boundsLabel,
+    });
+
     const payload = buildUxVisionPayload(
       {
         imageDataUrl,
         componentName: selected.name,
         componentKind: selected.kind,
-        boundsLabel: `${Math.round(selected.bounds.w)}×${Math.round(selected.bounds.h)} at (${Math.round(selected.bounds.x)},${Math.round(selected.bounds.y)})`,
+        boundsLabel,
+        domContext: domContext
+          ? {
+              element: domContext.element,
+              computed: domContext.computed,
+              cssRules: domContext.cssRules,
+              sheetsBlocked: domContext.sheetsBlocked,
+            }
+          : null,
       },
       isCustom
         ? { id: preset.id, customPrompt: preset.customPrompt }
         : (preset as UxPreset),
       settings,
     );
+
     setAnalyses((a) => ({
       ...a,
-      [tabId]: { label, icon, text: '', state: 'streaming' },
+      [tabId]: {
+        label,
+        icon,
+        text: '',
+        state: 'streaming',
+        imageDataUrl: imageDataUrl ?? undefined,
+        imageDims: imgDims ?? undefined,
+        imageBytes,
+        domContext,
+        inputs,
+      },
     }));
-    setActiveTab(tabId);
+
     let acc = '';
     const handle = llm(payload, (delta) => {
       acc += delta;
       setAnalyses((a) => ({
         ...a,
-        [tabId]: { label, icon, text: acc, state: 'streaming' },
+        [tabId]: {
+          ...a[tabId],
+          label,
+          icon,
+          text: acc,
+          state: 'streaming',
+        },
       }));
     });
     handle.result
       .then((full) =>
         setAnalyses((a) => ({
           ...a,
-          [tabId]: { label, icon, text: full, state: 'done' },
+          [tabId]: { ...a[tabId], label, icon, text: full, state: 'done' },
         })),
       )
       .catch((e) =>
         setAnalyses((a) => ({
           ...a,
           [tabId]: {
+            ...a[tabId],
             label,
             icon,
             text: acc,
@@ -244,6 +331,24 @@ export default function ComponentsTab() {
         })),
       );
   };
+
+  /* helpers (defined here so they close over component scope cheaply) */
+
+  function approxDataUrlBytes(dataUrl: string): number {
+    const i = dataUrl.indexOf(',');
+    if (i === -1) return dataUrl.length;
+    // base64 → 3/4 ratio. Strip ==/= padding tokens for a tighter approximation.
+    const payload = dataUrl.slice(i + 1).replace(/=+$/, '');
+    return Math.floor((payload.length * 3) / 4);
+  }
+  function measureDataUrl(dataUrl: string): Promise<{ w: number; h: number } | null> {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight });
+      img.onerror = () => resolve(null);
+      img.src = dataUrl;
+    });
+  }
 
   const runCustomPrompt = () => {
     const trimmed = customPrompt.trim();
@@ -299,7 +404,7 @@ export default function ComponentsTab() {
   }
 
   const tabItems: TabItem[] = [
-    { id: 'components', label: 'Components', icon: '🧩' },
+    { id: 'tree', label: 'Tree', icon: '🧩' },
     ...Object.entries(analyses).map(([id, a]) => ({
       id,
       label: a.label,
@@ -309,6 +414,13 @@ export default function ComponentsTab() {
     })),
   ];
 
+  // Keep the tree body mounted at all times (just hidden when an
+  // analysis tab is active). Unmounting kills the react-arborist
+  // ResizeObserver's measurement and the tree comes back at the
+  // placeholder size until the next resize event — visible bug
+  // reported by the user in v0.3.19.
+  const treeActive = activeTab === 'tree';
+
   return (
     <div className="flex h-full flex-col">
       <Tabs
@@ -316,19 +428,20 @@ export default function ComponentsTab() {
         activeId={activeTab}
         onSelect={setActiveTab}
         onClose={(id) => {
-          if (id === 'components') return;
+          if (id === 'tree') return;
           setAnalyses((a) => {
             const next = { ...a };
             delete next[id];
             return next;
           });
-          if (activeTab === id) setActiveTab('components');
+          if (activeTab === id) setActiveTab('tree');
         }}
       >
-        {activeTab !== 'components' ? (
-          <UxAnalysisPane result={analyses[activeTab]} />
-        ) : (
-          <div className="flex h-full flex-col">
+        {!treeActive && <UxAnalysisPane result={analyses[activeTab]} />}
+        <div
+          style={{ display: treeActive ? 'flex' : 'none' }}
+          className="h-full flex-col"
+        >
       <div className="flex flex-wrap items-center gap-2 border-b border-panel-border bg-panel-surface px-2 py-1.5 text-[11px]">
         <input
           type="text"
@@ -573,8 +686,7 @@ export default function ComponentsTab() {
           )}
         </aside>
       </div>
-          </div>
-        )}
+        </div>
       </Tabs>
     </div>
   );
@@ -583,27 +695,35 @@ export default function ComponentsTab() {
 function UxAnalysisPane({
   result,
 }: {
-  result: {
-    label: string;
-    icon: string;
-    text: string;
-    state: 'streaming' | 'done' | 'error';
-    error?: string;
-  } | undefined;
+  result:
+    | {
+        label: string;
+        icon: string;
+        text: string;
+        state: 'streaming' | 'done' | 'error';
+        error?: string;
+        imageDataUrl?: string;
+        imageDims?: { w: number; h: number };
+        imageBytes?: number;
+        inputs?: string[];
+      }
+    | undefined;
 }) {
   if (!result) {
     return (
       <div className="flex h-full items-center justify-center text-[11px] text-panel-muted">
-        Result lost — re-run the analysis from the Components tab.
+        Result lost — re-run the analysis from the Tree tab.
       </div>
     );
   }
   return (
     <div className="flex h-full flex-col">
-      <div className="shrink-0 border-b border-panel-border bg-panel-surface px-3 py-1.5 text-[10px] uppercase tracking-wide text-panel-muted">
-        <span className="mr-1">{result.icon}</span>
-        {result.label}
-        <span className="ml-2">
+      <div className="flex shrink-0 items-center justify-between border-b border-panel-border bg-panel-surface px-3 py-1.5 text-[10px] uppercase tracking-wide text-panel-muted">
+        <span>
+          <span className="mr-1">{result.icon}</span>
+          {result.label}
+        </span>
+        <span>
           {result.state === 'streaming'
             ? '· streaming'
             : result.state === 'error'
@@ -612,13 +732,67 @@ function UxAnalysisPane({
         </span>
       </div>
       <div className="scrollbar-thin min-h-0 flex-1 overflow-auto p-3 text-[12px]">
+        {(result.imageDataUrl || (result.inputs && result.inputs.length > 0)) && (
+          <details
+            open
+            className="mb-3 rounded border border-panel-border bg-panel-bg/40 p-2 text-[11px]"
+          >
+            <summary className="cursor-pointer text-panel-text/90 hover:text-white">
+              Context sent to model
+              {result.imageDims
+                ? ` · ${result.imageDims.w}×${result.imageDims.h} crop`
+                : ''}
+              {result.imageBytes
+                ? ` · ${Math.round(result.imageBytes / 1024)} KB image`
+                : ''}
+            </summary>
+            <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-[auto_minmax(0,1fr)]">
+              {result.imageDataUrl && (
+                <a
+                  href={result.imageDataUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block shrink-0"
+                  title="Open the cropped image in a new tab"
+                >
+                  <img
+                    src={result.imageDataUrl}
+                    alt="Cropped region sent to the model"
+                    className="max-h-40 max-w-[240px] rounded border border-panel-border bg-black/30 object-contain"
+                  />
+                </a>
+              )}
+              {result.inputs && result.inputs.length > 0 && (
+                <ul className="space-y-0.5 text-[11px] text-panel-text/90">
+                  {result.inputs.map((b, i) => (
+                    <li key={i} className="flex gap-1.5">
+                      <span className="text-panel-muted">·</span>
+                      <span
+                        dangerouslySetInnerHTML={{
+                          __html: b.replace(
+                            /`([^`]+)`/g,
+                            '<code class="rounded bg-black/40 px-1 text-[10px] text-amber-200">$1</code>',
+                          ),
+                        }}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </details>
+        )}
         {result.text ? (
           <MarkdownRenderer
             source={result.text}
             streaming={result.state === 'streaming'}
           />
         ) : (
-          <div className="text-[11px] text-panel-muted">Asking model…</div>
+          <div className="text-[11px] text-panel-muted">
+            {result.imageDataUrl
+              ? 'Asking model… (image + DOM context sent)'
+              : 'Preparing inputs…'}
+          </div>
         )}
         {result.state === 'streaming' && (
           <span className="ml-0.5 inline-block animate-pulse">▍</span>

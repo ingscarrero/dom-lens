@@ -219,6 +219,65 @@ export async function callFindAssetUsages(url: string): Promise<
   }
 }
 
+export interface InspectedElement {
+  tag: string;
+  id: string | null;
+  classes: string[];
+  attributes: Record<string, string>;
+  outerHTML: string;
+  text: string;
+  isExact: boolean;
+}
+
+export interface InspectedRegion {
+  element: InspectedElement;
+  computed: Record<string, string>;
+  cssRules: string[];
+  rulesScanned: number;
+  sheetsAccessible: number;
+  sheetsBlocked: number;
+}
+
+/**
+ * Inspect the DOM at the centre of a doc-coord rect. Returns the
+ * element + a subset of computed styles + matching CSS rules. Used by
+ * the Components-tab UX-vision flow to send DOM context to the model
+ * alongside the cropped screenshot.
+ */
+export async function callInspectAtBounds(
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+): Promise<InspectedRegion | null> {
+  const expr = `(function(){
+    try {
+      if (!window.__dom_lens__ || typeof window.__dom_lens__.inspectAtBounds !== 'function') {
+        return JSON.stringify({ ok: false, reason: 'no-api' });
+      }
+      return JSON.stringify(window.__dom_lens__.inspectAtBounds(${x}, ${y}, ${w}, ${h}));
+    } catch (e) {
+      return JSON.stringify({ ok: false, reason: (e && e.message) || String(e) });
+    }
+  })()`;
+  const res = await inspectedEval<string>(expr);
+  if (res.isError || typeof res.value !== 'string') return null;
+  try {
+    const parsed = JSON.parse(res.value);
+    if (!parsed?.ok) return null;
+    return {
+      element: parsed.element,
+      computed: parsed.computed ?? {},
+      cssRules: parsed.cssRules ?? [],
+      rulesScanned: parsed.rulesScanned ?? 0,
+      sheetsAccessible: parsed.sheetsAccessible ?? 0,
+      sheetsBlocked: parsed.sheetsBlocked ?? 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Centers a document-coord rect in the viewport. The Components tab
  * calls this whenever the user picks a different fiber so the

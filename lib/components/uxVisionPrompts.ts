@@ -279,9 +279,38 @@ ${COMMON_RULES}`,
 ];
 
 /**
+ * DOM context attached to a UX-vision request. Captured by
+ * `inspectAtBounds` in the MAIN world: the live element at the bounds
+ * centre + a subset of computed styles + CSS rules whose selectors
+ * match it. Including this in the prompt is the difference between
+ * "describe what you see" and "tell me how this is actually built".
+ */
+export interface UxDomContext {
+  element: {
+    tag: string;
+    id: string | null;
+    classes: string[];
+    attributes: Record<string, string>;
+    outerHTML: string;
+    text: string;
+    isExact: boolean;
+  };
+  computed: Record<string, string>;
+  cssRules: string[];
+  sheetsBlocked: number;
+}
+
+/**
  * Build the chat payload for a UX-vision call. Accepts either a preset
  * id or a free-form `customPrompt` (custom prompts use a generic
  * UX-pro system message + the user's question).
+ *
+ * When `domContext` is supplied (from the MAIN-world inspector), the
+ * user message includes a `## DOM context` block with the element's
+ * tag/attributes, outer HTML, the key computed styles, and the
+ * matching CSS rules. That's the difference between "describe what
+ * you see" and "tell me how this is built" — the model can cite
+ * specific class names, font stacks, palette tokens, etc.
  */
 export function buildUxVisionPayload(
   args: {
@@ -290,13 +319,14 @@ export function buildUxVisionPayload(
     componentKind?: string;
     componentPath?: string;
     boundsLabel?: string;
+    domContext?: UxDomContext | null;
   },
   preset: UxPreset | { id: string; customPrompt: string },
   settings: Settings,
 ): LmChatPayload {
   const isCustom = 'customPrompt' in preset;
   const system = isCustom
-    ? `${ROLE}\n\nThe user has a specific question about the captured UI region. Answer it directly, citing what you see in the image. Output markdown with section headings where useful.\n\n${COMMON_RULES}`
+    ? `${ROLE}\n\nThe user has a specific question about the captured UI region. Answer it directly, citing what you see in the image AND in the supplied DOM context when relevant. Output markdown with section headings where useful.\n\n${COMMON_RULES}`
     : preset.system;
 
   const contextLines: string[] = [];
@@ -305,24 +335,21 @@ export function buildUxVisionPayload(
   if (args.componentPath) contextLines.push(`Path in fiber tree: ${args.componentPath}`);
   if (args.boundsLabel) contextLines.push(`Visible region: ${args.boundsLabel}`);
 
-  const userText = isCustom
-    ? [
-        `Question: ${preset.customPrompt.trim()}`,
-        '',
-        contextLines.length ? '## Context\n' + contextLines.join('\n') : '',
-      ]
-        .filter(Boolean)
-        .join('\n')
-    : [
-        `Analyse the attached image of the captured region.`,
-        '',
-        contextLines.length ? '## Context\n' + contextLines.join('\n') : '',
-      ]
-        .filter(Boolean)
-        .join('\n');
+  const sections: string[] = [];
+  if (isCustom) {
+    sections.push(`Question: ${preset.customPrompt.trim()}`);
+  } else {
+    sections.push(`Analyse the attached image of the captured region.`);
+  }
+  if (contextLines.length) {
+    sections.push('## Context\n' + contextLines.join('\n'));
+  }
+  if (args.domContext) {
+    sections.push(formatDomContext(args.domContext));
+  }
 
   const parts: ContentPart[] = [
-    { type: 'text', text: userText },
+    { type: 'text', text: sections.join('\n\n') },
     { type: 'image_url', image_url: { url: args.imageDataUrl } },
   ];
 
@@ -336,6 +363,108 @@ export function buildUxVisionPayload(
       { role: 'user', content: parts },
     ],
   };
+}
+
+function formatDomContext(ctx: UxDomContext): string {
+  const el = ctx.element;
+  const out: string[] = ['## DOM context'];
+
+  // Element identity
+  const identity: string[] = [`tag: <${el.tag}>`];
+  if (el.id) identity.push(`id: #${el.id}`);
+  if (el.classes.length)
+    identity.push(`classes: ${el.classes.slice(0, 8).map((c) => '.' + c).join(' ')}`);
+  if (Object.keys(el.attributes).length) {
+    const attrs = Object.entries(el.attributes)
+      .slice(0, 8)
+      .map(([k, v]) => `${k}="${v}"`)
+      .join(' ');
+    identity.push(`attributes: ${attrs}`);
+  }
+  out.push(identity.join('\n'));
+  if (!el.isExact) {
+    out.push(
+      'Note: the element matched at the bounds centre was a leaf; we walked up to the smallest ancestor whose rect covers ≥60% of the requested region.',
+    );
+  }
+  if (el.text) {
+    out.push(`text: "${el.text}"`);
+  }
+
+  // Outer HTML
+  out.push('### outerHTML\n```html\n' + el.outerHTML + '\n```');
+
+  // Computed styles
+  if (Object.keys(ctx.computed).length) {
+    const lines = Object.entries(ctx.computed)
+      .map(([k, v]) => `${k}: ${v};`)
+      .join('\n');
+    out.push('### computed styles (key)\n```css\n' + lines + '\n```');
+  }
+
+  // CSS rules
+  if (ctx.cssRules.length) {
+    out.push(
+      '### matching CSS rules (first ' + ctx.cssRules.length + ')\n```css\n' +
+        ctx.cssRules.join('\n\n') +
+        '\n```',
+    );
+  } else if (ctx.sheetsBlocked > 0) {
+    out.push(
+      `### matching CSS rules\nNo accessible rules — ${ctx.sheetsBlocked} stylesheet(s) blocked by cross-origin policy.`,
+    );
+  }
+
+  return out.join('\n\n');
+}
+
+/**
+ * Build a high-level summary of what was attached to the request, used
+ * by the analysis-tab UI to show the user "what we sent". Returns
+ * markdown bullets.
+ */
+export function describeInputs(args: {
+  imageBytes?: number;
+  imageDims?: { w: number; h: number };
+  domContext?: UxDomContext | null;
+  componentName?: string;
+  componentKind?: string;
+  boundsLabel?: string;
+}): string[] {
+  const out: string[] = [];
+  if (args.componentName) {
+    out.push(
+      `Selected component: \`${args.componentName}\`${args.componentKind ? ` (${args.componentKind})` : ''}`,
+    );
+  }
+  if (args.boundsLabel) out.push(`Visible region: ${args.boundsLabel}`);
+  if (args.imageBytes != null) {
+    const dims =
+      args.imageDims && args.imageDims.w
+        ? ` (${args.imageDims.w}×${args.imageDims.h} px)`
+        : '';
+    out.push(`Cropped PNG screenshot${dims} — ~${Math.round(args.imageBytes / 1024)} KB`);
+  }
+  if (args.domContext) {
+    const el = args.domContext.element;
+    out.push(
+      `Live DOM element: \`<${el.tag}${el.id ? ' id="' + el.id + '"' : ''}${el.classes.length ? ' class="' + el.classes.slice(0, 3).join(' ') + (el.classes.length > 3 ? ' …' : '') + '"' : ''}>\``,
+    );
+    out.push(`Outer HTML (~${args.domContext.element.outerHTML.length} chars)`);
+    const styleCount = Object.keys(args.domContext.computed).length;
+    if (styleCount > 0) out.push(`${styleCount} key computed styles`);
+    if (args.domContext.cssRules.length > 0) {
+      out.push(
+        `${args.domContext.cssRules.length} matching CSS rule${args.domContext.cssRules.length === 1 ? '' : 's'}`,
+      );
+    }
+    if (args.domContext.sheetsBlocked > 0) {
+      out.push(
+        `(${args.domContext.sheetsBlocked} stylesheet${args.domContext.sheetsBlocked === 1 ? '' : 's'} blocked by CORS — not included)`,
+      );
+    }
+  }
+  return out;
 }
 
 /**

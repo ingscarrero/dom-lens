@@ -71,6 +71,28 @@ interface DomLensApi {
    * fiber into view (the highlight overlay alone doesn't help if the
    * rect is off-screen). */
   scrollToBounds(x: number, y: number, w: number, h: number): { ok: true };
+  /** Inspect the live DOM element at the centre of the given doc-coord
+   * rect: tag/classes/attributes/outerHTML, a subset of computed
+   * styles, and CSS rules whose selector matches the element. Used by
+   * the Components-tab UX-vision flow to enrich the prompt with the
+   * actual DOM context, not just the image. */
+  inspectAtBounds(x: number, y: number, w: number, h: number): {
+    ok: true;
+    element: {
+      tag: string;
+      id: string | null;
+      classes: string[];
+      attributes: Record<string, string>;
+      outerHTML: string;
+      text: string;
+      isExact: boolean;
+    };
+    computed: Record<string, string>;
+    cssRules: string[];
+    rulesScanned: number;
+    sheetsAccessible: number;
+    sheetsBlocked: number;
+  } | { ok: false; reason: string };
 }
 
 export default defineContentScript({
@@ -427,7 +449,7 @@ export default defineContentScript({
     }
 
     const api: DomLensApi = {
-      version: '0.3.19',
+      version: '0.3.20',
       capture(opts) {
         return runCapture(consoleBuffer, {
           maxMarkdownChars: opts?.maxMarkdownChars ?? 20000,
@@ -595,6 +617,149 @@ export default defineContentScript({
           }
         }
         return { ok: true };
+      },
+      inspectAtBounds(x, y, w, h) {
+        // Document-coord centre → viewport coords (after current scroll).
+        const cx = x + w / 2;
+        const cy = y + h / 2;
+        const vx = cx - window.scrollX;
+        const vy = cy - window.scrollY;
+        if (vx < 0 || vy < 0 || vx > window.innerWidth || vy > window.innerHeight) {
+          return { ok: false, reason: 'bounds centre is off-screen' };
+        }
+        let el = document.elementFromPoint(vx, vy);
+        if (!el) return { ok: false, reason: 'no element at bounds centre' };
+        // Walk up the tree until we find an element whose own rect is
+        // close to the requested bounds — elementFromPoint often
+        // returns a leaf text/span when the user really meant the
+        // surrounding card. We accept the first ancestor whose rect
+        // covers at least 60% of the requested rect area.
+        const wanted = w * h;
+        let isExact = true;
+        if (wanted > 0) {
+          let probe: Element | null = el;
+          let bestDelta = Infinity;
+          let bestEl: Element | null = el;
+          for (let depth = 0; probe && depth < 8; depth++) {
+            const r = (probe as HTMLElement).getBoundingClientRect();
+            const overlap = Math.max(0, Math.min(r.width, w)) * Math.max(0, Math.min(r.height, h));
+            const delta = Math.abs(r.width * r.height - wanted);
+            if (overlap / wanted >= 0.6 && delta < bestDelta) {
+              bestDelta = delta;
+              bestEl = probe;
+            }
+            probe = probe.parentElement;
+          }
+          if (bestEl !== el) {
+            isExact = false;
+            el = bestEl;
+          }
+        }
+        if (!el) return { ok: false, reason: 'walk-up failed' };
+
+        const attrs: Record<string, string> = {};
+        for (let i = 0; i < el.attributes.length; i++) {
+          const a = el.attributes[i];
+          if (a.name === 'style' || a.name === 'class' || a.name === 'id') continue;
+          let v = a.value;
+          if (v.length > 200) v = v.slice(0, 200) + '…';
+          attrs[a.name] = v;
+        }
+
+        const computedAll = getComputedStyle(el as HTMLElement);
+        const computedKeys = [
+          'display',
+          'position',
+          'flex-direction',
+          'grid-template-columns',
+          'gap',
+          'width',
+          'height',
+          'color',
+          'background-color',
+          'background-image',
+          'background',
+          'font-family',
+          'font-size',
+          'font-weight',
+          'line-height',
+          'letter-spacing',
+          'text-align',
+          'padding',
+          'margin',
+          'border',
+          'border-radius',
+          'box-shadow',
+          'opacity',
+          'z-index',
+          'transform',
+          'transition',
+        ];
+        const computed: Record<string, string> = {};
+        for (const k of computedKeys) {
+          const v = computedAll.getPropertyValue(k);
+          if (v && v !== 'normal' && v !== 'auto' && v !== '0px') computed[k] = v.trim();
+        }
+
+        const cssRules: string[] = [];
+        let rulesScanned = 0;
+        let sheetsAccessible = 0;
+        let sheetsBlocked = 0;
+        const MAX_RULES = 30;
+        const sheets = Array.from(document.styleSheets);
+        outer: for (const sheet of sheets) {
+          let rules: CSSRuleList | null = null;
+          try {
+            rules = (sheet as CSSStyleSheet).cssRules;
+            sheetsAccessible += 1;
+          } catch {
+            sheetsBlocked += 1;
+            continue;
+          }
+          if (!rules) continue;
+          for (let i = 0; i < rules.length; i++) {
+            const rule = rules[i] as any;
+            // STYLE_RULE = 1
+            if (rule.type !== 1 || !rule.selectorText) continue;
+            rulesScanned += 1;
+            try {
+              if ((el as HTMLElement).matches(rule.selectorText)) {
+                let text = String(rule.cssText);
+                if (text.length > 400) text = text.slice(0, 400) + '…';
+                cssRules.push(text);
+                if (cssRules.length >= MAX_RULES) break outer;
+              }
+            } catch {
+              /* selector invalid in this engine (e.g. legacy IE hacks) */
+            }
+            // Cheap escape hatch on huge sites — don't grind through
+            // 50k rules looking for matches.
+            if (rulesScanned > 8000) break outer;
+          }
+        }
+
+        let outerHTML = (el as HTMLElement).outerHTML || '';
+        if (outerHTML.length > 4096) outerHTML = outerHTML.slice(0, 4096) + '\n<!-- …truncated to 4 KB -->';
+        let text = ((el as HTMLElement).textContent || '').replace(/\s+/g, ' ').trim();
+        if (text.length > 500) text = text.slice(0, 500) + '…';
+
+        return {
+          ok: true,
+          element: {
+            tag: el.tagName.toLowerCase(),
+            id: (el as HTMLElement).id || null,
+            classes: Array.from((el as HTMLElement).classList || []),
+            attributes: attrs,
+            outerHTML,
+            text,
+            isExact,
+          },
+          computed,
+          cssRules,
+          rulesScanned,
+          sheetsAccessible,
+          sheetsBlocked,
+        };
       },
       scrollToSelector(selector, opts) {
         let el: Element | null = null;
