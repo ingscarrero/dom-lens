@@ -1,5 +1,28 @@
-import { SourceMapConsumer, type RawSourceMap } from 'source-map-js';
+import { decode } from '@jridgewell/sourcemap-codec';
 import type { LoadedModule, ParsedSourceMap, SourceFileNode } from './types';
+
+/**
+ * Minimal JSON shape we care about. We used to import this from
+ * `source-map-js`, but that package's SourceMapConsumer triggers a CSP
+ * `unsafe-eval` violation inside the Chrome extension page (it uses
+ * `new Function(...)` for its lazy index-list construction). Chrome's
+ * own Sources panel can ignore that because DevTools' frontend runs
+ * with relaxed CSP — extension pages don't.
+ *
+ * @jridgewell/sourcemap-codec is pure JS (~2 KB) with no Function/eval
+ * — used by Vite, Rollup, Svelte, esbuild's REPL, etc. We only need
+ * VLQ decoding + per-source byte attribution, so we read the JSON
+ * directly and walk decoded segments.
+ */
+export interface RawSourceMap {
+  version?: number;
+  file?: string;
+  sourceRoot?: string;
+  sources: string[];
+  sourcesContent?: Array<string | null>;
+  names?: string[];
+  mappings: string;
+}
 
 /**
  * Resolves the source-map URL associated with a JS file.
@@ -151,52 +174,48 @@ function errMsg(e: unknown): string {
 }
 
 /**
- * Walk the VLQ-encoded `mappings` string and attribute generated-column spans
- * back to the originating source. We use source-map-js's consumer to iterate
- * mappings in generated order, summing the column delta between consecutive
- * mappings as a byte estimate for the prior mapping's source.
+ * Walk the VLQ-encoded `mappings` string and attribute generated-column
+ * spans back to the originating source.
  *
- * This isn't perfectly precise (it ignores names and JS comments stripped by
- * the bundler), but it's the standard approximation used by tools like
- * `source-map-explorer` and produces useful relative sizes.
+ * `@jridgewell/sourcemap-codec`'s `decode` returns a 2D array
+ * `SourceMapSegment[][]`:
+ *   - outer index = generated line (zero-based)
+ *   - inner index = segments on that line, in generated-column order
+ *   - each segment is one of:
+ *       [genCol]
+ *       [genCol, sourceIdx, srcLine, srcCol]
+ *       [genCol, sourceIdx, srcLine, srcCol, nameIdx]
+ *
+ * Bytes are estimated by summing the gap between successive segments
+ * on the same generated line — same approximation that
+ * `source-map-explorer` and webpack-bundle-analyzer use.
+ *
+ * No external SourceMapConsumer needed — and crucially no `new Function`,
+ * so the parser runs inside the extension page's strict CSP without
+ * tripping `unsafe-eval`.
  */
 export function parseSourceMap(raw: RawSourceMap): ParsedSourceMap {
-  const consumer = new SourceMapConsumer(raw);
   const sources = raw.sources ?? [];
   const sizes = new Array<number>(sources.length).fill(0);
-  const sourceIndex = new Map<string, number>();
-  sources.forEach((s, i) => sourceIndex.set(s, i));
 
-  // Collect mappings into a flat list so we can compute spans across line breaks.
-  interface Mapping {
-    genLine: number;
-    genCol: number;
-    source: string | null;
-  }
-  const mappings: Mapping[] = [];
-  consumer.eachMapping((m) => {
-    mappings.push({
-      genLine: m.generatedLine,
-      genCol: m.generatedColumn,
-      source: m.source ?? null,
-    });
-  });
-  // Sort by generated position (consumer typically yields in order, but be safe).
-  mappings.sort((a, b) => (a.genLine - b.genLine) || (a.genCol - b.genCol));
+  const decoded = raw.mappings ? decode(raw.mappings) : [];
 
-  for (let i = 0; i < mappings.length; i++) {
-    const cur = mappings[i];
-    if (!cur.source) continue;
-    const next = mappings[i + 1];
-    let span: number;
-    if (next && next.genLine === cur.genLine) {
-      span = Math.max(0, next.genCol - cur.genCol);
-    } else {
-      // End of line — assume a small default; precise width unknown without source.
-      span = 1;
+  for (let lineIdx = 0; lineIdx < decoded.length; lineIdx++) {
+    const segments = decoded[lineIdx];
+    for (let segIdx = 0; segIdx < segments.length; segIdx++) {
+      const seg = segments[segIdx];
+      // Segments with only the generated column carry no source — skip.
+      if (seg.length < 4) continue;
+      const genCol = seg[0];
+      const srcIdx = seg[1] as number;
+      if (srcIdx < 0 || srcIdx >= sizes.length) continue;
+      const next = segments[segIdx + 1];
+      // Span = horizontal gap to the next segment on this line. Last
+      // segment on the line gets 1 byte (we don't have the actual line
+      // width from the codec alone).
+      const span = next ? Math.max(0, (next[0] as number) - genCol) : 1;
+      sizes[srcIdx] += span;
     }
-    const idx = sourceIndex.get(cur.source);
-    if (idx != null) sizes[idx] += span;
   }
 
   let totalBytes = 0;
@@ -208,7 +227,7 @@ export function parseSourceMap(raw: RawSourceMap): ParsedSourceMap {
   // index with `sources`. Missing entries (null) just mean the bundler
   // chose not to embed that file (typical for node_modules in some
   // configs, or any 'nosources-source-map' build).
-  const rawSourcesContent = (raw as any).sourcesContent;
+  const rawSourcesContent = raw.sourcesContent;
   const sourcesContent: Array<string | null> = new Array(sources.length).fill(null);
   if (Array.isArray(rawSourcesContent)) {
     for (let i = 0; i < sources.length; i++) {

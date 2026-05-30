@@ -1,7 +1,7 @@
 {
   "name": "dom-lens",
   "private": true,
-  "version": "0.3.11",
+  "version": "0.3.12",
   "type": "module",
   "scripts": {
     "dev": "wxt",
@@ -11,6 +11,7 @@
     "postinstall": "wxt prepare"
   },
   "dependencies": {
+    "@jridgewell/sourcemap-codec": "^1.5.5",
     "@uiw/react-json-view": "^2.0.0-alpha.43",
     "@xyflow/react": "^12.10.2",
     "bippy": "^0.5.41",
@@ -20,7 +21,6 @@
     "react-dom": "^18.3.1",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
-    "source-map-js": "^1.2.1",
     "turndown": "^7.2.4",
     "zustand": "^5.0.14"
   },
