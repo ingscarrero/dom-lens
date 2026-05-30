@@ -105,4 +105,9 @@ export interface ParsedSourceMap {
   totalBytes: number;
   /** Hierarchical view, grouped by path segments */
   tree: SourceFileNode;
+  /** Optional original source code per `sources` entry. Aligned with
+   * `sources` by index. Missing entries are stored as null. Webpack,
+   * Vite, Rollup, esbuild all emit this by default in dev mode — only
+   * `nosources-source-map` builds intentionally strip it. */
+  sourcesContent: Array<string | null>;
 }

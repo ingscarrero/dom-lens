@@ -138,7 +138,20 @@ export function parseSourceMap(raw: RawSourceMap): ParsedSourceMap {
 
   const tree = buildSourceTree(sources, sizes);
 
-  return { sources, sizes, totalBytes, tree };
+  // sourcesContent is optional in the spec; when present it's aligned by
+  // index with `sources`. Missing entries (null) just mean the bundler
+  // chose not to embed that file (typical for node_modules in some
+  // configs, or any 'nosources-source-map' build).
+  const rawSourcesContent = (raw as any).sourcesContent;
+  const sourcesContent: Array<string | null> = new Array(sources.length).fill(null);
+  if (Array.isArray(rawSourcesContent)) {
+    for (let i = 0; i < sources.length; i++) {
+      const v = rawSourcesContent[i];
+      if (typeof v === 'string') sourcesContent[i] = v;
+    }
+  }
+
+  return { sources, sizes, totalBytes, tree, sourcesContent };
 }
 
 /**

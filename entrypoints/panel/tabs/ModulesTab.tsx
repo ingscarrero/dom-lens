@@ -10,6 +10,13 @@ import {
   type ProbeRecord,
 } from '@/lib/modules/sourcemapProbe';
 import type { HeadProxy } from '@/lib/modules/fetchProxy';
+import {
+  buildModuleTree,
+  expandModuleWithSourcemap,
+  type ModuleTreeNode,
+} from '@/lib/modules/moduleTree';
+import { ModulesTree } from './modules/ModulesTree';
+import { FileDetail } from './modules/FileDetail';
 import { buildReformatPayload, parseReformatResponse, languageLabel } from '@/lib/modules/reformat';
 import { extractSkeleton, symbolLabel, type Skeleton, type SkeletonSymbol } from '@/lib/modules/skeleton';
 import { buildSymbolSummaryPayload } from '@/lib/modules/summarizeSymbol';
@@ -35,6 +42,11 @@ export default function ModulesTab({
   const [openId, setOpenId] = useState<string | null>(null);
   const [kindFilter, setKindFilter] = useState<string>('all');
   const [query, setQuery] = useState('');
+  const [viewMode, setViewMode] = useState<'tree' | 'flat'>('tree');
+  const [tree, setTree] = useState<ModuleTreeNode | null>(null);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [selectedFileNode, setSelectedFileNode] = useState<ModuleTreeNode | null>(null);
+  const expandedModulesRef = useRef(new Set<string>());
 
   const modules = snap?.modules ?? [];
   const techStack = snap?.techStack;
@@ -77,6 +89,39 @@ export default function ModulesTab({
     () => summarizeProbe(probeRecords, modules.length),
     [probeRecords, modules.length],
   );
+
+  // Build the deployed-modules tree once per snapshot. Subsequent
+  // sourcemap expansions modify it in-place via setTree(expand(...)).
+  useEffect(() => {
+    if (modules.length === 0) {
+      setTree(null);
+      expandedModulesRef.current.clear();
+      return;
+    }
+    setTree(buildModuleTree(modules));
+    expandedModulesRef.current.clear();
+  }, [snap?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Lazy-fetch the sourcemap for the module node the user just opened in
+  // the tree, then graft its sources subtree under that node. Skipped if
+  // we've already expanded it or the probe said the map is missing.
+  const handleExpandModule = async (node: ModuleTreeNode) => {
+    if (!node.module) return;
+    if (expandedModulesRef.current.has(node.id)) return;
+    expandedModulesRef.current.add(node.id);
+    const probe = probeRecords.get(node.module.id);
+    if (probe?.status === 'missing' || probe?.status === 'error') return;
+    try {
+      const map = await fetchAndParseSourceMap(node.module, fetchText);
+      setTree((prev) =>
+        prev ? expandModuleWithSourcemap(prev, node.id, map) : prev,
+      );
+    } catch {
+      // Quietly leave the node unexpanded — the user can still see the
+      // deployed module entry. The flat-table view also surfaces the
+      // failure via the Code module detail's "no sourcemap" banner.
+    }
+  };
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -186,27 +231,97 @@ export default function ModulesTab({
           </div>
         )}
         <div className="mt-2 flex gap-2">
-          <select
-            value={kindFilter}
-            onChange={(e) => setKindFilter(e.target.value)}
-            className="rounded border border-panel-border bg-panel-bg px-2 py-1 text-[11px] text-panel-text"
-          >
-            {kinds.map((k) => (
-              <option key={k} value={k}>
-                {k}
-              </option>
-            ))}
-          </select>
+          <div className="flex rounded border border-panel-border bg-panel-bg text-[11px]">
+            <button
+              type="button"
+              onClick={() => setViewMode('tree')}
+              className={
+                'px-2 py-1 ' +
+                (viewMode === 'tree'
+                  ? 'bg-panel-accent/30 text-white'
+                  : 'text-panel-muted hover:text-white')
+              }
+              title="Hierarchical view (Chrome DevTools Sources style) — surfaces sourcemap-resolved files"
+            >
+              Tree
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('flat')}
+              className={
+                'px-2 py-1 ' +
+                (viewMode === 'flat'
+                  ? 'bg-panel-accent/30 text-white'
+                  : 'text-panel-muted hover:text-white')
+              }
+              title="Flat sortable table of every deployed module"
+            >
+              Flat
+            </button>
+          </div>
+          {viewMode === 'flat' && (
+            <select
+              value={kindFilter}
+              onChange={(e) => setKindFilter(e.target.value)}
+              className="rounded border border-panel-border bg-panel-bg px-2 py-1 text-[11px] text-panel-text"
+            >
+              {kinds.map((k) => (
+                <option key={k} value={k}>
+                  {k}
+                </option>
+              ))}
+            </select>
+          )}
           <input
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Filter by URL or library…"
+            placeholder={
+              viewMode === 'tree' ? 'Filter files / folders / origins…' : 'Filter by URL or library…'
+            }
             className="flex-1 rounded border border-panel-border bg-panel-bg px-2 py-1 text-[11px] text-panel-text"
           />
         </div>
       </div>
 
+      {viewMode === 'tree' && tree && (
+        <div className="grid min-h-0 flex-1 grid-cols-[minmax(220px,32%)_1fr]">
+          <div className="min-h-0 overflow-auto border-r border-panel-border bg-panel-bg/30">
+            <ModulesTree
+              root={tree}
+              selectedId={selectedNodeId}
+              onSelect={(node) => {
+                setSelectedNodeId(node.id);
+                if (node.type === 'source-file') setSelectedFileNode(node);
+              }}
+              onExpandModule={(node) => void handleExpandModule(node)}
+              statusForUrl={(url) => {
+                const rec = probeRecords.get(url);
+                if (!rec) return null;
+                return <SourceMapBadge record={rec} kindLabel="" />;
+              }}
+              filter={query}
+            />
+          </div>
+          <div className="min-h-0 overflow-hidden">
+            {selectedFileNode ? (
+              <FileDetail
+                node={selectedFileNode}
+                streamingOneshot={streamingOneshot}
+              />
+            ) : (
+              <div className="flex h-full items-center justify-center p-6 text-center text-[11px] text-panel-muted">
+                Select a source file on the left to view its content and run
+                an AI analysis (Audit / Improve / Explain). Expand a deployed
+                module 📦 to fetch its sourcemap and surface the original
+                files.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {viewMode === 'flat' && (
       <div className="min-h-0 flex-1 overflow-auto">
         <table className="w-full text-[11px]">
           <thead className="sticky top-0 z-10 bg-panel-surface text-panel-muted">
@@ -285,6 +400,7 @@ export default function ModulesTab({
           </tbody>
         </table>
       </div>
+      )}
     </div>
   );
 }

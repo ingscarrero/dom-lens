@@ -175,6 +175,99 @@ When the probe says `missing` for a module, expanding the row no
 longer triggers a wasted fetch+parse attempt — the detail view
 jumps straight to the `🗺 Map module` UX.
 
+## Sources-panel-style tree view
+
+The Modules tab's default view is a hierarchical tree modelled on
+Chrome DevTools' Sources panel:
+
+```
+🌐 localhost:3001/
+  📁 /
+    📦 main.js                  ✓ found
+      📂 Authored sources
+        📂 webpack:///
+          📁 src/
+            📄 App.jsx          1.2 KB
+            📄 bootstrap.jsx    980 B
+          📁 node_modules/
+            📁 react/           42 KB
+🌐 localhost:3002/
+  📦 remoteEntry.js              ✓ found
+  📦 src_Widget_jsx.js           ✓ found
+```
+
+Top level: one node per **origin** (each distinct `https://host:port`).
+Below that: folder nodes mirroring the URL pathname. Each leaf is a
+**deployed module** — the loaded JS/CSS/image/font.
+
+When a module has a sourcemap (probe layer 1 or 2 from above), the
+first time the user expands it we fetch + parse the `.map` and graft
+the original sources back under that node — Chrome calls these
+"Authored sources". They live under a virtual prefix (`webpack:///`,
+`vite:///`, etc.) so deeply-nested vendor paths
+(`webpack:///node_modules/.pnpm/...`) stay collapsible.
+
+The source content comes from the sourcemap's optional
+`sourcesContent` array — an embedded copy of the original source for
+each file in `sources[]`. Webpack `devtool: 'source-map'`, Vite,
+Rollup, and esbuild all default to including it. The
+`nosources-source-map` flavour strips it intentionally (e.g.
+production builds that publish maps for stack-trace symbolication but
+not source disclosure); for those, the file viewer shows a fallback
+notice instead of the code.
+
+### File-level AI actions
+
+Selecting a `source-file` leaf opens the right pane: source code on
+top, action bar below. Three buttons, all streaming, all returning
+markdown rendered with our existing renderer:
+
+- **✨ Audit** — security / correctness / accessibility / risk
+  review. Output is grouped under `### Security`, `### Correctness
+  bugs`, `### Accessibility`, `### Other risks`. Each item carries
+  a `[critical|high|medium|low]` severity tag and cites line numbers
+  when possible. Temperature 0.
+- **💡 Improve** — concrete refactor opportunities with an
+  `[trivial|small|medium|large]` effort tag. Capped at 8 items so
+  the model picks the highest-leverage. No rewrites.
+- **📖 Explain** — what the file does, in 4-6 bullets:
+  Purpose / Public API / Inputs / Outputs+side effects / Notable
+  patterns / Risks.
+
+All three send the file (clamped at 24 KB) via the
+`streamingOneshot` proxy so progress shows token-by-token. The
+language fence tag is derived from the path (`.tsx` → `tsx`, `.go`
+→ `go`, etc.) so the model knows the dialect.
+
+### Tree vs Flat
+
+A `Tree | Flat` segmented control in the toolbar lets the user fall
+back to the v0.3.8 flat table when they want sortable rows or the
+kind-filter dropdown. Tree is default because it's the better
+default for understanding a page — Chrome made the same choice in
+the Sources panel.
+
+### Federation demo walkthrough — tree view
+
+With `pnpm dev` in `examples/mf-demo`:
+
+1. http://localhost:3001 → DOM Lens → **Capture snapshot**.
+2. Open **Modules** (tree view default). The probe pass auto-runs.
+3. Expand `localhost:3001/main.js` — sourcemap fetches, the
+   "Authored sources" subtree appears with `webpack:///src/App.jsx`
+   and friends.
+4. Click `App.jsx` → source renders on the right.
+5. Click **✨ Audit** → streaming markdown report; for the demo
+   `App.jsx` you'll typically get findings about the inline
+   error-boundary, the lack of CSP nonces, etc.
+6. Click **📖 Explain** for a quick onboarding summary, or
+   **💡 Improve** for refactor ideas.
+
+To exercise the negative path: restart with `SOURCEMAPS=0 pnpm dev`.
+The tree will still show the deployed modules but expansion won't
+graft anything (probe says `missing`); the v0.3.7 `🗺 Map module`
+skeleton + `✨ Summarize symbol` path is then the way to navigate.
+
 ## When to extend
 
 If a real bundle reliably defeats the regex extractor (no symbols
