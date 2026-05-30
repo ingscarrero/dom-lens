@@ -22,6 +22,26 @@ Then open:
 
 Stop with `Ctrl+C` — `concurrently --kill-others-on-fail` shuts both down.
 
+### Sourcemap toggle
+
+Both webpack configs default to `devtool: 'source-map'`, so the demo
+emits real `.map` siblings for every chunk and adds the
+`//# sourceMappingURL=…` trailer comment. This means DOM Lens's
+Modules-tab probe pass should show ✓ green badges for all the JS
+modules.
+
+To test the **opposite** case (no sourcemaps — the "production
+build that didn't publish maps" scenario), restart with the env
+var set:
+
+```bash
+SOURCEMAPS=0 pnpm dev
+```
+
+The Modules tab will then show ✗ missing for every JS module, the
+detail view falls back to the `🗺 Map module` skeleton extractor,
+and per-symbol `✨ Summarize symbol` becomes the navigation path.
+
 ## Validate with DOM Lens
 
 1. Make sure the DOM Lens extension is loaded (see top-level [README](../../README.md)).

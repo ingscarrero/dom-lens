@@ -3,8 +3,14 @@ const HtmlWebpackPlugin = require('html-webpack-plugin');
 const { ModuleFederationPlugin } = require('webpack').container;
 const deps = require('./package.json').dependencies;
 
+// Emit real .map siblings by default so the remote doubles as a positive
+// demo case for the DOM Lens sourcemap probe. Set SOURCEMAPS=0 to test
+// the "no sourcemap" path (probe → missing → Map module fallback).
+const sourcemapsOn = process.env.SOURCEMAPS !== '0';
+
 module.exports = {
   entry: './src/index.js',
+  devtool: sourcemapsOn ? 'source-map' : false,
   output: {
     path: path.resolve(__dirname, 'dist'),
     publicPath: 'auto',
