@@ -12,10 +12,32 @@ import type { StreamingOneshot } from '@/lib/lm-studio/streamingProxy';
 import { MarkdownRenderer } from '@/lib/ui/MarkdownRenderer';
 import { CodeViewer } from '@/lib/ui/CodeViewer';
 import { formatBytes } from '@/lib/modules/sourcemap';
+import {
+  findMappingForModule,
+  resolveGithubFileUrl,
+  type GithubMapping,
+} from '@/lib/modules/githubMapping';
 
 interface Props {
   node: ModuleTreeNode;
   streamingOneshot: StreamingOneshot;
+  /** URL of the deployed module the file lives under. Drives GitHub
+   * mapping resolution (we need the bundle URL to match against
+   * `urlPattern` — the source path alone is not enough). */
+  parentModuleUrl?: string;
+}
+
+function useGithubLink(
+  parentModuleUrl: string | undefined,
+  sourcePath: string | undefined,
+  mappings: readonly GithubMapping[],
+): { webUrl: string; rawUrl: string; mapping: GithubMapping } | null {
+  if (!parentModuleUrl || !sourcePath) return null;
+  const mapping = findMappingForModule(parentModuleUrl, mappings);
+  if (!mapping) return null;
+  const urls = resolveGithubFileUrl(sourcePath, mapping);
+  if (!urls) return null;
+  return { webUrl: urls.webUrl, rawUrl: urls.rawUrl, mapping };
 }
 
 /**
@@ -29,8 +51,9 @@ interface Props {
  * the existing streaming-oneshot pipeline so the user sees progress
  * token-by-token.
  */
-export function FileDetail({ node, streamingOneshot }: Props) {
+export function FileDetail({ node, streamingOneshot, parentModuleUrl }: Props) {
   const settings = useStore((s) => s.settings);
+  const githubLink = useGithubLink(parentModuleUrl, node.sourcePath, settings.githubMappings ?? []);
   const [active, setActive] = useState<FileAction | null>(null);
   const [result, setResult] = useState<{
     action: FileAction;
@@ -87,8 +110,20 @@ export function FileDetail({ node, streamingOneshot }: Props) {
               {node.sourcePath ?? node.id}
             </div>
           </div>
-          <div className="shrink-0 text-[10px] text-panel-muted">
-            {node.bytes != null ? formatBytes(node.bytes) : ''} · {language}
+          <div className="flex shrink-0 items-center gap-2 text-[10px] text-panel-muted">
+            {node.bytes != null && <span>{formatBytes(node.bytes)}</span>}
+            <span>{language}</span>
+            {githubLink && (
+              <a
+                href={githubLink.webUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={`View on GitHub · ${githubLink.mapping.label}`}
+                className="rounded border border-panel-accent/40 bg-panel-accent/10 px-1.5 py-0.5 text-[10px] text-panel-accent hover:bg-panel-accent/20"
+              >
+                🐙 GitHub
+              </a>
+            )}
           </div>
         </div>
         {hasSource && (

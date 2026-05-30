@@ -5,6 +5,16 @@ export interface CustomPrompt {
   prompt: string;
 }
 
+export interface GithubMapping {
+  id: string;
+  label: string;
+  urlPattern: string;
+  owner: string;
+  repo: string;
+  branch: string;
+  basePath?: string;
+}
+
 export interface Settings {
   baseUrl: string;
   model: string;
@@ -28,6 +38,10 @@ export interface Settings {
   /** User-defined prompts that appear in the Insights gallery alongside
    * the built-in PROMPT_PRESETS. */
   customPrompts: CustomPrompt[];
+  /** URL-pattern → GitHub repo mappings used by the Modules tab to
+   * surface "View on GitHub" links and link the module-analysis panel
+   * to a canonical source repo. See `lib/modules/githubMapping.ts`. */
+  githubMappings: GithubMapping[];
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -46,6 +60,7 @@ export const DEFAULT_SETTINGS: Settings = {
   defaultSliceCount: 4,
   sendSlicedTiles: true,
   customPrompts: [],
+  githubMappings: [],
   systemPrompt:
     'You are a senior frontend engineer reviewing a web page snapshot. ' +
     'You receive a semantic markdown representation of the page DOM, ' +

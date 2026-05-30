@@ -1,6 +1,11 @@
 import { useState } from 'react';
 import { useStore } from '../store';
-import { saveSettings, DEFAULT_SETTINGS } from '@/lib/storage/settings';
+import {
+  saveSettings,
+  DEFAULT_SETTINGS,
+  type GithubMapping,
+} from '@/lib/storage/settings';
+import { parseRepoSpec } from '@/lib/modules/githubMapping';
 
 interface Props {
   onTestConnection(baseUrl: string, apiKey?: string): void;
@@ -177,6 +182,19 @@ export default function SettingsTab({ onTestConnection }: Props) {
         </label>
       </section>
 
+      <section className="mb-6 max-w-xl space-y-2">
+        <h3 className="text-sm font-semibold">GitHub source mappings</h3>
+        <p className="text-[11px] text-panel-muted">
+          Map deployed-module URL patterns to GitHub repositories. The
+          Modules tab uses these to surface "View on GitHub" links on
+          source files and a repo card in the module-analysis panel.
+        </p>
+        <GithubMappingsEditor
+          mappings={local.githubMappings ?? []}
+          onChange={(next) => save({ ...local, githubMappings: next })}
+        />
+      </section>
+
       <section className="max-w-xl space-y-2">
         <h3 className="text-sm font-semibold">System prompt</h3>
         <textarea
@@ -192,6 +210,150 @@ export default function SettingsTab({ onTestConnection }: Props) {
           Reset to default
         </button>
       </section>
+    </div>
+  );
+}
+
+function GithubMappingsEditor({
+  mappings,
+  onChange,
+}: {
+  mappings: GithubMapping[];
+  onChange(next: GithubMapping[]): void;
+}) {
+  const [draft, setDraft] = useState<Partial<GithubMapping> & { repoInput?: string }>({
+    branch: 'main',
+  });
+  const [error, setError] = useState<string | null>(null);
+
+  const inputCls =
+    'block w-full rounded border border-panel-border bg-black/30 p-1 text-[11px] text-panel-text focus:border-panel-accent focus:outline-none';
+
+  const add = () => {
+    const label = draft.label?.trim();
+    const urlPattern = draft.urlPattern?.trim();
+    const parsed = parseRepoSpec(draft.repoInput?.trim() ?? '');
+    if (!label) return setError('Label is required.');
+    if (!urlPattern) return setError('URL pattern is required.');
+    if (!parsed) return setError('Repository is required (owner/repo or full GitHub URL).');
+    const next: GithubMapping = {
+      id: 'gh-' + Date.now().toString(36),
+      label,
+      urlPattern,
+      owner: parsed.owner,
+      repo: parsed.repo,
+      branch: (draft.branch?.trim() || parsed.branch || 'main') || 'main',
+      basePath: (draft.basePath?.trim() || parsed.basePath || undefined) ?? undefined,
+    };
+    onChange([...mappings, next]);
+    setDraft({ branch: 'main' });
+    setError(null);
+  };
+
+  const remove = (id: string) => {
+    onChange(mappings.filter((m) => m.id !== id));
+  };
+
+  return (
+    <div className="space-y-2">
+      {mappings.length === 0 ? (
+        <div className="rounded border border-dashed border-panel-border p-2 text-[11px] text-panel-muted">
+          No mappings yet. Add one below.
+        </div>
+      ) : (
+        <ul className="space-y-1">
+          {mappings.map((m) => (
+            <li
+              key={m.id}
+              className="flex items-start justify-between gap-2 rounded border border-panel-border bg-panel-bg/40 p-2"
+            >
+              <div className="min-w-0 flex-1">
+                <div className="text-[11px] font-semibold text-white">{m.label}</div>
+                <div className="text-[10px] text-panel-muted">
+                  matches <span className="font-mono">{m.urlPattern}</span>
+                </div>
+                <div className="text-[10px] text-panel-muted">
+                  →{' '}
+                  <span className="font-mono">
+                    {m.owner}/{m.repo}@{m.branch}
+                    {m.basePath ? `/${m.basePath}` : ''}
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => remove(m.id)}
+                title="Delete mapping"
+                className="rounded border border-panel-border px-1.5 text-[10px] text-panel-muted hover:text-red-300"
+              >
+                ✕
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="rounded border border-panel-border bg-black/20 p-2 text-[11px]">
+        <div className="mb-1 text-[10px] uppercase tracking-wide text-panel-muted">
+          Add mapping
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <label className="block">
+            <span className="text-panel-muted">Label</span>
+            <input
+              className={inputCls}
+              value={draft.label ?? ''}
+              onChange={(e) => setDraft((d) => ({ ...d, label: e.target.value }))}
+              placeholder="MF demo host"
+            />
+          </label>
+          <label className="block">
+            <span className="text-panel-muted">URL pattern (substring)</span>
+            <input
+              className={inputCls}
+              value={draft.urlPattern ?? ''}
+              onChange={(e) => setDraft((d) => ({ ...d, urlPattern: e.target.value }))}
+              placeholder="localhost:3001"
+            />
+          </label>
+          <label className="col-span-2 block">
+            <span className="text-panel-muted">Repository</span>
+            <input
+              className={inputCls}
+              value={draft.repoInput ?? ''}
+              onChange={(e) => setDraft((d) => ({ ...d, repoInput: e.target.value }))}
+              placeholder="owner/repo  ·  https://github.com/owner/repo/tree/branch/sub"
+            />
+          </label>
+          <label className="block">
+            <span className="text-panel-muted">Branch</span>
+            <input
+              className={inputCls}
+              value={draft.branch ?? ''}
+              onChange={(e) => setDraft((d) => ({ ...d, branch: e.target.value }))}
+              placeholder="main"
+            />
+          </label>
+          <label className="block">
+            <span className="text-panel-muted">Base path (optional)</span>
+            <input
+              className={inputCls}
+              value={draft.basePath ?? ''}
+              onChange={(e) => setDraft((d) => ({ ...d, basePath: e.target.value }))}
+              placeholder="host"
+            />
+          </label>
+        </div>
+        {error && <div className="mt-2 text-[10px] text-red-300">{error}</div>}
+        <div className="mt-2 flex justify-end">
+          <button
+            type="button"
+            onClick={add}
+            className="rounded bg-panel-accent px-2 py-1 text-[11px] font-medium text-white hover:bg-sky-400"
+          >
+            Add mapping
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

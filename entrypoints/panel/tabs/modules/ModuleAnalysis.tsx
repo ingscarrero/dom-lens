@@ -12,6 +12,7 @@ import {
 import type { StreamingOneshot } from '@/lib/lm-studio/streamingProxy';
 import { MarkdownRenderer } from '@/lib/ui/MarkdownRenderer';
 import { formatBytes } from '@/lib/modules/sourcemap';
+import { findMappingForModule, repoHomeUrl } from '@/lib/modules/githubMapping';
 
 interface Props {
   module: LoadedModule;
@@ -50,6 +51,7 @@ export function ModuleAnalysis({ module, sourcemap, streamingOneshot }: Props) {
   const authoredCount = sourcemap.sources.filter(
     (s) => !s.includes('node_modules') && !s.startsWith('webpack:///webpack/'),
   ).length;
+  const githubMapping = findMappingForModule(module.url, settings.githubMappings ?? []);
 
   const runAction = (action: ModuleAction) => {
     if (!llmConfigured) return;
@@ -84,6 +86,22 @@ export function ModuleAnalysis({ module, sourcemap, streamingOneshot }: Props) {
           Module analysis · <span className="font-mono">{module.pathname.split('/').pop()}</span>
         </div>
         <div className="mt-0.5 truncate text-[10px] text-panel-muted">{module.url}</div>
+        {githubMapping && (
+          <a
+            href={repoHomeUrl(githubMapping)}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={`Open repository on GitHub · ${githubMapping.owner}/${githubMapping.repo}@${githubMapping.branch}${githubMapping.basePath ? '/' + githubMapping.basePath : ''}`}
+            className="mt-1.5 inline-flex items-center gap-1 rounded border border-panel-accent/40 bg-panel-accent/10 px-2 py-0.5 text-[10px] text-panel-accent hover:bg-panel-accent/20"
+          >
+            🐙 <span className="font-semibold">{githubMapping.label}</span>
+            <span className="text-panel-muted">·</span>
+            <span className="font-mono">
+              {githubMapping.owner}/{githubMapping.repo}@{githubMapping.branch}
+              {githubMapping.basePath ? `/${githubMapping.basePath}` : ''}
+            </span>
+          </a>
+        )}
         <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] sm:grid-cols-3">
           <Stat label="Total sources" value={`${sourcemap.sources.length}`} />
           <Stat

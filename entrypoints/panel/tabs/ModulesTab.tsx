@@ -464,10 +464,17 @@ export default function ModulesTab({
               // re-clicking the parent. If no file is picked but the
               // module's sourcemap is loaded, show ModuleAnalysis.
               if (selectedFileNode) {
+                // The selected file lives under a module. Walk back to
+                // the module by stripping `#sources/...` from the file
+                // node id; the module node's id (its deployed URL) is
+                // what GitHub mappings match against.
+                const moduleId = selectedFileNode.id.replace(/#sources(?:\/.*)?$/, '');
+                const moduleNode = tree ? findModuleNodeById(tree, moduleId) : null;
                 return (
                   <FileDetail
                     node={selectedFileNode}
                     streamingOneshot={streamingOneshot}
+                    parentModuleUrl={moduleNode?.module?.url}
                   />
                 );
               }
