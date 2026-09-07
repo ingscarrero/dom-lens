@@ -16,6 +16,7 @@ All notable changes to DOM Lens are documented here.
 - `lib/modules/sourcemap.ts`: base64-encoded inline `sourceMappingURL` data URIs were never decoded (the `;base64` flag check excluded the comma it was testing for) and fell back to a JSON parse error.
 
 ### Changed
+- Removed the unused `bippy` dependency; `lib/react/walkFiber.ts` has been a dependency-free, read-only walker since v0.2.0 (README and module reference corrected to match).
 - Dependency build scripts are opt-in via `pnpm-workspace.yaml` (`esbuild` allowed, `spawn-sync` ignored) so a clean `pnpm install` exits 0 on pnpm 10+.
 - `docs/architecture.md`: corrected the console-capture trade-off — `window` `error` / `unhandledrejection` listeners are installed; the gap is cross-origin iframes and workers.
 

@@ -90,7 +90,7 @@ Everything runs locally. No telemetry, no accounts, no remote calls except to th
 | State | [zustand](https://github.com/pmndrs/zustand) v5 |
 | Component tree | [react-arborist](https://github.com/brimdata/react-arborist) |
 | Federation graph | [@xyflow/react](https://reactflow.dev) |
-| React fiber walk | [bippy](https://github.com/aidenybai/bippy) |
+| React fiber walk | Own read-only walker (`lib/react/walkFiber.ts`) — no React DevTools hook, see [ADR-0006](docs/adr/0006-read-only-react-root-discovery.md) |
 | HTML → Markdown | [turndown](https://github.com/mixmark-io/turndown) |
 | Syntax highlight | [prism-react-renderer](https://github.com/FormidableLabs/prism-react-renderer) — CSP-safe, no `eval` |
 | Source maps | [@jridgewell/sourcemap-codec](https://github.com/nicolo-ribaudo/source-map-codec) — CSP-safe VLQ decode |

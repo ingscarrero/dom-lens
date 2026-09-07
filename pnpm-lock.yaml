@@ -17,9 +17,6 @@ importers:
       '@xyflow/react':
         specifier: ^12.10.2
         version: 12.10.2(@types/react@18.3.29)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
-      bippy:
-        specifier: ^0.5.41
-        version: 0.5.41(react@18.3.1)
       mermaid:
         specifier: ^11.15.0
         version: 11.15.0
@@ -911,11 +908,6 @@ packages:
   binary-extensions@2.3.0:
     resolution: {integrity: sha512-Ceh+7ox5qe7LJuLHoY0feh3pHuUDHAcRUeyL2VYghZwfpkNIy/+8Ocg0a3UuSoYzavmylwuLWQOf3hl0jjMMIw==}
     engines: {node: '>=8'}
-
-  bippy@0.5.41:
-    resolution: {integrity: sha512-jCP2pXXLhXqPrAN+iSEFZmLI4uUM4fjSqajh0K+TmM062VehfDT3ZJNkrTGyN701Z5XMejs9qAudSqkMGhSMKg==}
-    peerDependencies:
-      react: '>=17.0.1'
 
   bluebird@3.7.2:
     resolution: {integrity: sha512-XpNj6GDQzdfW+r2Wnn7xiSAd7TM3jzkxGXBGTtWKuSXv1xUV+azxAm8jdWZN06QTQk+2N2XB9jRDkvbmQmcRtg==}
@@ -3951,10 +3943,6 @@ snapshots:
       require-from-string: 2.0.2
 
   binary-extensions@2.3.0: {}
-
-  bippy@0.5.41(react@18.3.1):
-    dependencies:
-      react: 18.3.1
 
   bluebird@3.7.2: {}
 

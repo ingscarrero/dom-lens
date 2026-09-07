@@ -194,7 +194,7 @@ Registry mapping `ModuleKind` → viewer component. Allows the ModulesTab to ren
 ## `lib/react/`
 
 ### `walkFiber.ts`
-Fiber traversal using `bippy`. Walks `window.__REACT_DEVTOOLS_GLOBAL_HOOK__` fiber roots. Skips host DOM nodes (tags start with lowercase). Returns raw fiber objects. Runs in the MAIN world.
+Dependency-free fiber traversal. Discovers roots read-only by scanning the DOM for React's `__reactContainer$<hash>` container property (React 18+) and the legacy `_reactRootContainer._internalRoot` (React 16/17), merging in any roots an already-installed React DevTools hook reports — it never installs or patches the hook (`installDevtoolsHookShim` is a deliberate no-op, see [ADR-0006](adr/0006-read-only-react-root-discovery.md)). `walkAllFiberRoots()` walks each root with a 5 000-node cap (`truncated` flag), maps fiber tags to `FiberKind`, skips host DOM nodes while keeping their component children, and records document-space bounds, host tag and a short hint per node. Runs in the MAIN world.
 
 ### `fiberToTree.ts`
 Converts raw fiber objects to `ComponentNode[]` — the serialisable shape used by the panel store and react-arborist tree.
