@@ -73,7 +73,10 @@ function decodeInlineSourceMap(dataUri: string): RawSourceMap | null {
     const m = dataUri.match(/^data:application\/json(?:;[^,]*)?,(.*)$/i);
     if (!m) return null;
     let payload = m[1];
-    if (/;base64,/i.test(dataUri.slice(0, dataUri.indexOf(',')))) {
+    // Only inspect the media-type header (everything before the first
+    // comma) so a `;base64` flag is never confused with payload content.
+    const header = dataUri.slice(0, dataUri.indexOf(','));
+    if (/;base64$/i.test(header)) {
       payload = atob(payload);
     } else {
       payload = decodeURIComponent(payload);
