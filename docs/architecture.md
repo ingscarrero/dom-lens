@@ -4,36 +4,26 @@
 
 DOM Lens is a Chrome MV3 DevTools extension. There are four distinct execution contexts at runtime; understanding which code runs where is the key to understanding the whole system.
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│  DevTools panel (chrome-extension://<id>/panel/index.html)              │
-│  React + Zustand — the entire UI lives here                             │
-│  Communicates with background via chrome.runtime.connect long-lived port│
-└───────────────────────────────┬─────────────────────────────────────────┘
-                                │  chrome.runtime.connect  (PanelToBg / BgToPanel)
-                                ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│  Background Service Worker (background.ts)                              │
-│  Owns: screenshots, LM Studio proxy, net.fetch/net.head proxy           │
-│  Has <all_urls> host permission — bypasses CORS for localhost AI server │
-└───────────────────────────────┬─────────────────────────────────────────┘
-                                │
-           chrome.tabs.captureVisibleTab
-           fetch → LM Studio / Ollama
-           (returns results via port message)
+```mermaid
+flowchart TB
+    subgraph ext["Extension (chrome-extension://&lt;id&gt;)"]
+        panel["DevTools panel<br/>panel/index.html — React + Zustand<br/>the entire UI lives here"]
+        sw["Background service worker<br/>background.ts<br/>screenshots · LLM proxy · net.fetch / net.head"]
+    end
+    subgraph page["Inspected tab"]
+        main["MAIN world<br/>injected.content.ts @ document_start<br/>window.__dom_lens__ · sees __webpack_require__, fiber roots"]
+        iso["ISOLATED world<br/>content.ts<br/>placeholder for a postMessage bridge"]
+    end
+    ai[("Local OpenAI-compatible server<br/>LM Studio / Ollama / llama.cpp")]
 
-┌─────────────────────────────────────────────────────────────────────────┐
-│  Inspected page — MAIN world (injected.content.ts)                      │
-│  Runs at document_start; sees window.*, __webpack_require__, etc.       │
-│  Panel talks to it via chrome.devtools.inspectedWindow.eval             │
-└─────────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────────────┐
-│  Inspected page — ISOLATED world (content.ts)                           │
-│  Reserved for future bridging; currently a placeholder                  │
-└─────────────────────────────────────────────────────────────────────────┘
+    panel -- "chrome.runtime.connect (PanelToBg / BgToPanel)" --> sw
+    panel -- "chrome.devtools.inspectedWindow.eval" --> main
+    sw -- "chrome.tabs.captureVisibleTab" --> page
+    sw -- "fetch (host_permissions: all_urls)" --> ai
+    main -. "window.postMessage (reserved)" .- iso
 ```
 
+Only the service worker talks to the network; only the MAIN-world script touches page globals; the panel orchestrates both. See the [C4 views](#c4-views) below for the system boundary and the [sequence diagrams](#sequence-diagrams) for the two main flows.
 ---
 
 ## Entrypoints
@@ -93,6 +83,146 @@ const cancel = streamingOneshot(payload, { onDelta, onDone, onError });
 
 ---
 
+## C4 views
+
+### Level 1 — System context
+
+```mermaid
+C4Context
+    title DOM Lens — system context
+    Person(dev, "Frontend engineer", "Opens DevTools on a page they are debugging or reviewing")
+    System(lens, "DOM Lens", "Chrome MV3 DevTools-panel extension: snapshots, React tree, federation map, module/sourcemap explorer, AI analysis")
+    System_Ext(page, "Inspected web page", "Any origin; may use React, webpack/Vite/Module Federation")
+    System_Ext(ai, "Local OpenAI-compatible LLM server", "LM Studio, Ollama, llama.cpp — runs on the developer's machine")
+    System_Ext(gh, "raw.githubusercontent.com", "Optional, unauthenticated: canonical sources when a GitHub mapping is configured")
+    System_Ext(tools, "Cursor / Claude / GitHub issue", "Optional deep-link targets for Propose PR change plans")
+
+    Rel(dev, lens, "Captures, browses, asks questions", "DevTools panel")
+    Rel(lens, page, "Reads DOM, fiber roots, globals, resources; probes .map siblings", "inspectedWindow.eval, fetch")
+    Rel(lens, ai, "Sends snapshot context, streams completions", "HTTP + SSE")
+    Rel(lens, gh, "Fetches original source files", "HTTPS GET")
+    Rel(lens, tools, "Opens a prefilled deep link", "cursor:// claude:// https://")
+```
+
+### Level 2 — Containers (runtime execution contexts)
+
+```mermaid
+C4Container
+    title DOM Lens — containers
+    Person(dev, "Frontend engineer")
+    System_Boundary(ext, "DOM Lens extension") {
+        Container(devtools, "DevTools page", "devtools/main.ts", "Registers the panel via chrome.devtools.panels.create")
+        Container(panel, "Panel SPA", "React 18 + Zustand + Tailwind", "All UI and orchestration: capture flow, module tree, analyses, settings")
+        Container(sw, "Background service worker", "background.ts", "Long-lived port router: screenshots, LLM proxy (SSE), net.fetch / net.head")
+        Container(main, "MAIN-world script", "injected.content.ts", "window.__dom_lens__: capture, highlight, scroll, inspectAtBounds")
+        Container(iso, "ISOLATED-world script", "content.ts", "Reserved postMessage bridge (placeholder)")
+        ContainerDb(storage, "chrome.storage.local", "Settings", "Endpoint, model, API key, toggles, GitHub mappings")
+    }
+    System_Ext(page, "Inspected page")
+    System_Ext(ai, "Local LLM server")
+    System_Ext(gh, "raw.githubusercontent.com")
+
+    Rel(dev, panel, "Uses")
+    Rel(devtools, panel, "Creates panel")
+    Rel(panel, sw, "PanelToBg / BgToPanel messages", "chrome.runtime.connect port")
+    Rel(panel, main, "Calls __dom_lens__.*", "inspectedWindow.eval")
+    Rel(panel, storage, "loadSettings / saveSettings")
+    Rel(sw, page, "captureVisibleTab; HEAD/GET .map", "chrome.tabs, fetch")
+    Rel(sw, ai, "POST /chat/completions (stream), GET /models", "fetch")
+    Rel(sw, gh, "GET raw file", "fetch")
+    Rel(main, page, "Reads DOM, fiber roots, __webpack_* globals")
+```
+
+---
+
+## Sequence diagrams
+
+### Capture: panel → background → MAIN world
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as User
+    participant P as Panel (captureFlow.ts)
+    participant M as MAIN world (__dom_lens__)
+    participant B as Background SW
+    participant C as Chrome (tabs API)
+
+    U->>P: click Capture snapshot
+    P->>M: eval scrollMetrics()
+    M-->>P: { scrollWidth, scrollHeight, dpr, … }
+    P->>M: eval capture({ maxMarkdownChars })
+    M->>M: serializeDom · walkAllFiberRoots · detectFederation · drain console · inventory resources
+    M-->>P: PartialSnapshot (JSON)
+    alt full-page screenshot enabled
+        P->>M: eval startPrimeLazyLoad()
+        loop poll ≤ 45 s
+            P->>M: eval getPrimeLazyLoadStatus()
+            M-->>P: running | done { finalHeight }
+        end
+        P->>M: eval beginFullPageCapture()
+        M-->>P: { hiddenCount }
+        loop each tile (≤ fullPageMaxTiles, ≥ 600 ms apart)
+            P->>M: eval scrollTo(x, y) + getScrollPosition()
+            P->>B: port: capture.tile { requestId, tabId }
+            B->>C: captureVisibleTab(windowId, png) (retry ×4, backoff)
+            C-->>B: data URL
+            B-->>P: port: capture.tile.result { requestId, dataUrl }
+        end
+        P->>M: eval endFullPageCapture()
+        P->>P: stitch tiles on canvas
+    else viewport only
+        P->>B: port: capture.tile
+        B-->>P: capture.tile.result
+    end
+    P->>P: classifyEntries(network, pageResources) → Snapshot
+    P->>P: store.setSnapshot(snapshot)
+    P-->>U: tabs populate
+```
+
+Every port request carries a UUID `requestId`; `App.tsx` keeps a `Map<requestId, resolver>` per message family so concurrent requests never cross wires.
+
+### Sourcemap probe and GitHub mapping
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as User
+    participant P as Panel (ModulesTab)
+    participant B as Background SW
+    participant S as Site origin
+    participant G as raw.githubusercontent.com
+
+    P->>P: classifyEntries → LoadedModule[]
+    par up to 4 concurrent (runPool)
+        P->>B: port: net.head { url + ".map" }
+        B->>S: HEAD /main.js.map (fallback GET Range: bytes=0-0)
+        S-->>B: 200 | 404
+        B-->>P: net.head.result { status }
+    end
+    P->>P: badge: ✓ found / – missing / ! error
+    U->>P: expand module
+    P->>B: port: net.fetch { mapUrl, maxBytes: 32 MB }
+    B->>S: GET /main.js.map (credentials: omit)
+    S-->>B: JSON
+    B-->>P: net.fetch.result { text }
+    P->>P: parseSourceMap → sizes, tree, sourcesContent
+    U->>P: select source file
+    alt sourcesContent present
+        P-->>U: CodeViewer shows embedded source
+    else stripped (nosources-source-map) or 🐙 GitHub mode
+        P->>P: findMappingForModule(moduleUrl, settings.githubMappings)
+        P->>P: resolveGithubFileUrl(sourcePath, mapping, moduleUrl) → rawUrl
+        P->>B: port: net.fetch { rawUrl }
+        B->>G: GET /owner/repo/branch/path (unauthenticated)
+        G-->>B: file
+        B-->>P: net.fetch.result
+        P-->>U: CodeViewer + View on GitHub link
+    end
+```
+
+---
+
 ## Message protocol
 
 Defined in `lib/bridge/protocol.ts`. All messages are plain discriminated union objects — no serialization library.
@@ -131,24 +261,24 @@ Every request carries a `requestId` (UUID). `App.tsx` maintains four `Map<string
 
 ## Capture flow
 
+```mermaid
+flowchart TD
+    click["User clicks Capture snapshot"] --> flow["captureFlow.ts — runCapture()"]
+    flow --> metrics["inspectedWindow.eval → __dom_lens__.scrollMetrics()"]
+    metrics --> cap["inspectedWindow.eval → __dom_lens__.capture()<br/>DOM markdown · fiber tree · federation graph<br/>console buffer · tech stack · resource inventory"]
+    cap --> full{"fullPageScreenshot?"}
+    full -- yes --> prime["startPrimeLazyLoad() — scroll to bottom, wait, re-measure"]
+    prime --> hide["beginFullPageCapture() — hide fixed/sticky elements"]
+    hide --> tiles["for each tile (≤ fullPageMaxTiles):<br/>scrollTo → post capture.tile → await PNG"]
+    tiles --> stitch["stitch tiles on a canvas"]
+    stitch --> restore["endFullPageCapture() — restore elements, scroll back"]
+    full -- no --> vp["single capture.tile of the visible viewport"]
+    restore --> classify["classifyEntries(network, pageResources)"]
+    vp --> classify
+    classify --> store["Zustand: setSnapshot(snapshot)"]
+    tiles -. "tile cap or scroll-locked page" .-> fallback["fall back to viewport-only + captureError"]
+    fallback --> classify
 ```
-User clicks "Capture snapshot"
-        │
-        ▼
-captureFlow.ts — runCapture()
-        │
-        ├─ inspectedWindow.eval → window.__dom_lens__.capture()
-        │     Returns: DOM markdown, fiber tree, MF graph,
-        │              console buffer, viewport metrics
-        │
-        ├─ Scroll-and-stitch (if full-page enabled):
-        │     For each tile position:
-        │       scroll page → post capture.tile → await PNG
-        │     Assemble tiles into one canvas
-        │
-        └─ Store result in Zustand: setSnapshot(snap)
-```
-
 The scroll-and-stitch path hides fixed/sticky elements before capturing tiles (they'd appear in every tile), re-shows them after, and smooth-scrolls with a re-measure pass to handle lazy-loaded content changing the page height.
 
 ---
@@ -186,33 +316,33 @@ Used by:
 
 ## Sourcemap pipeline
 
+```mermaid
+flowchart TD
+    open["Modules tab opens"] --> inv["pageInventory.ts<br/>performance.getEntriesByType('resource') ∪ devtools network"]
+    inv --> cls["classify.ts — chunk kind, framework, bundler, library"]
+    cls --> probe["sourcemapProbe.ts — runPool(max 4)"]
+    probe --> declared{"SourceMap header<br/>already seen?"}
+    declared -- yes --> found["status: declared"]
+    declared -- no --> head["net.head(url + '.map')<br/>(SW falls back to GET Range: 0-0)"]
+    head -- 2xx --> found2["status: found"]
+    head -- 4xx/5xx --> missing["status: missing"]
+    head -- network error --> err["status: error"]
+    found --> tree["moduleTree.ts — origin → folder → module"]
+    found2 --> tree
+    missing --> tree
+    err --> tree
+    tree --> expand["user expands a module"]
+    expand --> fetch["net.fetch(map URL, cap 32 MB)"]
+    fetch --> parse["sourcemap.ts — decode VLQ with @jridgewell/sourcemap-codec<br/>bytes per source · sourcesContent"]
+    parse --> graft["graft 'Authored sources' subtree"]
+    graft --> select["user selects a source file"]
+    select --> has{"sourcesContent<br/>present?"}
+    has -- yes --> view["CodeViewer (prism-react-renderer)"]
+    has -- "no (nosources-source-map)" --> gh{"GitHub mapping<br/>matches URL?"}
+    gh -- yes --> raw["net.fetch raw.githubusercontent.com"]
+    gh -- no --> notice["fallback notice + Map module skeleton"]
+    raw --> view
 ```
-Modules tab opens
-        │
-        ▼
-pageInventory.ts — reads window.performance.getEntriesByType('resource')
-  for each JS/CSS entry:
-    classify by URL fingerprint (lib/modules/classify.ts)
-    emit ModuleEntry { url, kind, framework, bundler, size }
-        │
-        ▼
-Concurrent probe pass (lib/concurrency/pool.ts, max 4):
-  for each module:
-    net.head(url + '.map') → check X-SourceMap / SourceMap headers
-    if found: net.fetch(map URL) → parse VLQ
-               @jridgewell/sourcemap-codec.decode() → sources[] + sourcesContent[]
-    update module status badge: ✓ mapped / ! error / – missing
-        │
-        ▼
-Build module tree (lib/modules/moduleTree.ts):
-  origin → bundle file → sourcemap sources (folders reconstructed from paths)
-        │
-        ▼
-User selects a source file:
-  If sourcesContent present: display via CodeViewer
-  If absent (nosources-source-map): try GitHub fetch if mapping configured
-```
-
 **CSP constraint**: `source-map-js` uses `new Function(...)` for VLQ decoding — blocked by the extension page CSP. Replaced with `@jridgewell/sourcemap-codec` (pure JS, no eval).
 
 ---
@@ -259,13 +389,15 @@ Settings are persisted to `chrome.storage.local` via `lib/storage/settings.ts`; 
 
 ## Design decisions
 
+Each decision below is also recorded as a dated ADR in [`docs/adr/`](adr/README.md) with context, alternatives and consequences.
+
 ### Why `inspectedWindow.eval` instead of a content script bridge?
 
 `inspectedWindow.eval` with `{ useContentScriptContext: false }` runs directly in the page's MAIN world — exactly where `__REACT_DEVTOOLS_GLOBAL_HOOK__`, `__webpack_require__`, and `window.__dom_lens__` live. A content script runs in the ISOLATED world and would need a `window.postMessage` bridge to reach MAIN-world globals, adding latency and complexity.
 
 ### Why not `chrome.debugger`?
 
-`chrome.debugger` attaches the DevTools protocol and shows a yellow "Chrome is being debugged" bar in the inspected tab — visible and alarming to end users. DOM Lens avoids it by patching `console.*` in the injected script instead. The trade-off: uncaught promise rejections that never reach `console` are missed.
+`chrome.debugger` attaches the DevTools protocol and shows a yellow "Chrome is being debugged" bar in the inspected tab — visible and alarming to end users. DOM Lens avoids it by patching `console.*` and listening for `window` `error` / `unhandledrejection` events in the injected script instead. The trade-off: output from cross-origin iframes and web workers is not seen.
 
 ### Why replace `source-map-js` with `@jridgewell/sourcemap-codec`?
 

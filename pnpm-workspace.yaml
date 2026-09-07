@@ -1,0 +1,7 @@
+# pnpm settings (pnpm >= 10 reads these here, not from package.json#pnpm).
+# No workspace packages are declared: examples/mf-demo is its own workspace.
+# Build scripts are opt-in for supply-chain hygiene; esbuild needs its
+# postinstall to place the platform binary, spawn-sync does not.
+allowBuilds:
+  esbuild: true
+  spawn-sync: false

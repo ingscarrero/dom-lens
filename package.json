@@ -2,19 +2,27 @@
   "name": "dom-lens",
   "private": true,
   "version": "0.3.21",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ingscarrero/dom-lens.git"
+  },
   "type": "module",
+  "packageManager": "pnpm@11.24.0",
   "scripts": {
     "dev": "wxt",
     "build": "wxt build",
     "zip": "wxt zip",
     "compile": "tsc --noEmit",
-    "postinstall": "wxt prepare"
+    "postinstall": "wxt prepare",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@jridgewell/sourcemap-codec": "^1.5.5",
     "@uiw/react-json-view": "^2.0.0-alpha.43",
     "@xyflow/react": "^12.10.2",
-    "bippy": "^0.5.41",
     "mermaid": "^11.15.0",
     "prism-react-renderer": "^2.4.1",
     "react": "^18.3.1",
@@ -31,10 +39,13 @@
     "@types/react-dom": "^18.3.1",
     "@types/turndown": "^5.0.6",
     "@vitejs/plugin-react": "^6.0.2",
+    "@vitest/coverage-v8": "^4.1.11",
     "autoprefixer": "^10.4.20",
+    "jsdom": "^27.4.0",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.2",
+    "vitest": "^4.1.11",
     "wxt": "^0.20.26"
   }
 }
