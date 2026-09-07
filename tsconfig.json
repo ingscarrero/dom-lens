@@ -14,6 +14,7 @@
     ".wxt/wxt.d.ts",
     "entrypoints/**/*",
     "lib/**/*",
+    "tests/**/*",
     "*.ts",
     "*.tsx"
   ]
