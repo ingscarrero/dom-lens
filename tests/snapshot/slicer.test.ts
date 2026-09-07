@@ -24,15 +24,22 @@ beforeEach(() => {
   drawCalls = [];
   imageShouldFail = false;
   vi.stubGlobal('Image', FakeImage);
-  HTMLCanvasElement.prototype.getContext = function () {
+  // Spy on the prototype methods (rather than assigning to them) so
+  // vi.restoreAllMocks() puts jsdom's originals back after each test and
+  // nothing leaks into other suites sharing this worker.
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(function () {
     return { drawImage: (...args: unknown[]) => drawCalls.push(args.slice(1) as number[]) } as any;
-  } as any;
-  HTMLCanvasElement.prototype.toDataURL = function (mime?: string) {
+  });
+  vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockImplementation(function (
+    this: HTMLCanvasElement,
+    mime?: string,
+  ) {
     return `data:${mime ?? 'image/png'};base64,${this.width}x${this.height}`;
-  };
+  });
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 

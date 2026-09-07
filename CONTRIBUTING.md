@@ -63,9 +63,10 @@ pnpm build            # wxt build → .output/chrome-mv3
 
 - Pure modules run under Node. DOM-dependent suites add
   `// @vitest-environment jsdom` at the top of the file.
-- jsdom has no canvas or image decoder; stub `Image` and
-  `HTMLCanvasElement.prototype.getContext` as `tests/snapshot/slicer.test.ts`
-  does.
+- jsdom has no canvas or image decoder; stub `Image` with `vi.stubGlobal`
+  and spy on `HTMLCanvasElement.prototype` methods with `vi.spyOn` (restored
+  in `afterEach`) as `tests/snapshot/slicer.test.ts` does — never assign to
+  prototypes directly, it leaks across suites.
 - Coverage thresholds are floors, not targets. Raise them when you add
   coverage; do not lower them to pass.
 
