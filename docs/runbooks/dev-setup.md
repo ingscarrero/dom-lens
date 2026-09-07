@@ -29,7 +29,17 @@ pnpm install
 pnpm compile
 ```
 
-Runs `tsc --noEmit`. Fix all TS errors before pushing; CI runs this gate.
+Runs `tsc --noEmit` over `entrypoints/`, `lib/` and `tests/`. Fix all TS errors before pushing; CI runs this gate.
+
+### Unit tests
+
+```bash
+pnpm test             # vitest run
+pnpm test:watch       # watch mode
+pnpm test:coverage    # with coverage — floors enforced in vitest.config.ts
+```
+
+Suites live in `tests/` and cover the pure `lib/` modules; see [CONTRIBUTING.md](../../CONTRIBUTING.md#tests).
 
 ---
 
@@ -120,11 +130,17 @@ dom-lens/
 │   └── mf-demo/               # Module Federation demo app
 │       ├── host/              # webpack5 host (port 3001)
 │       └── remote/            # webpack5 remote (port 3002)
+├── tests/                     # Vitest suites mirroring lib/
 ├── docs/
 │   ├── architecture.md
+│   ├── SYSTEM_DESIGN.md
+│   ├── REQUIREMENTS.md
 │   ├── modules-reference.md
 │   ├── CODE_MAPPING.md
+│   ├── adr/
 │   └── runbooks/
+├── .github/workflows/ci.yml
+├── vitest.config.ts
 ├── wxt.config.ts
 ├── tailwind.config.ts
 ├── tsconfig.json

@@ -1,10 +1,19 @@
 # DOM Lens
 
-A Chrome MV3 DevTools-panel extension that captures **DOM snapshots**, walks the **React fiber tree**, maps **Module Federation** topology, inspects **JS/CSS module bundles** down to their sourcemapped sources, and feeds everything to a **local OpenAI-compatible AI** (LM Studio, Ollama, llama.cpp, etc.) for on-device analysis.
+[![CI](https://github.com/ingscarrero/dom-lens/actions/workflows/ci.yml/badge.svg)](https://github.com/ingscarrero/dom-lens/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/badge/coverage-97%25_lines-brightgreen)](vitest.config.ts)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Chrome MV3](https://img.shields.io/badge/Chrome-MV3-4285F4?logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3)
 
-Everything runs locally. No telemetry, no remote API calls (except to your local AI server).
+**X-ray for any running web app — with a local LLM as the radiologist.**
 
-**Current version: `v0.3.21`**
+DOM Lens is a Chrome DevTools panel that captures what actually shipped on a page — the **DOM**, the **React fiber tree** (no React DevTools needed), the **Module Federation** topology, and every **JS/CSS bundle down to its sourcemapped original files** — then lets you interrogate all of it with a **local OpenAI-compatible model** (LM Studio, Ollama, llama.cpp). Point it at a production site you have never seen the source of and get an architecture diagram, a risk audit, a bundle breakdown, or a UX critique of one component, without anything leaving your machine.
+
+Why it exists: understanding a deployed frontend usually means cloning a repo you may not have, or reading minified code. DOM Lens starts from the running page instead, does the deterministic work itself (classification, sourcemap decoding, skeleton extraction, fiber walking), and reserves the model for the questions only a model can answer — inside strict token budgets that 8B-class local models can handle.
+
+Everything runs locally. No telemetry, no accounts, no remote calls except to the AI endpoint you configure. See [privacy and data flow](docs/REQUIREMENTS.md#23-privacy-and-data-flow) for the complete list of what leaves the machine and when.
+
+**Current version: `v0.3.21`** · 16 k lines of TypeScript · 110 unit tests
 
 ---
 
@@ -136,21 +145,40 @@ WXT launches a Chrome profile with the extension pre-loaded and auto-reloaded on
 
 ---
 
+## Testing
+
+```bash
+pnpm compile          # tsc --noEmit — entrypoints, lib and tests
+pnpm test             # vitest run
+pnpm test:coverage    # vitest run --coverage (thresholds enforced)
+pnpm build            # wxt build → .output/chrome-mv3
+```
+
+The unit suite (`tests/`) covers the pure modules in `lib/` — asset classification, tech-stack fingerprints, sourcemap decoding, GitHub mapping, federation detection, React fiber walking, DOM serialisation, screenshot slicing and the concurrency pool — under Node or jsdom, with no Chrome APIs. Coverage is measured over exactly those modules (97 % lines / 89 % branches at the time of writing) and CI fails below the floors in `vitest.config.ts`. The panel UI, service worker and MAIN-world script are exercised manually against [`examples/mf-demo`](docs/runbooks/mf-demo.md). CI runs type-check → tests → build on every PR and push to `main`.
+
+---
+
 ## Documentation index
 
 | Document | Description |
 |---|---|
-| [Architecture](docs/architecture.md) | Message flows, entrypoint map, design decisions |
+| [Architecture](docs/architecture.md) | Execution contexts, C4 context/container views, sequence diagrams, message protocol, design decisions |
+| [System design](docs/SYSTEM_DESIGN.md) | Goals, MV3/DevTools constraints, rejected alternatives, failure modes, scaling, local-vs-remote cost |
+| [Requirements](docs/REQUIREMENTS.md) | Functional requirements per tab traced to code; performance budgets, security/CSP, privacy, reliability, accessibility |
+| [ADRs](docs/adr/README.md) | Dated architecture decision records |
 | [Module reference](docs/modules-reference.md) | Every `lib/` module explained |
+| [Code mapping](docs/CODE_MAPPING.md) | How large minified bundles are navigated without sourcemaps |
 | [Dev setup runbook](docs/runbooks/dev-setup.md) | Full local development environment |
 | [AI setup runbook](docs/runbooks/ai-setup.md) | LM Studio / Ollama / llama.cpp server setup |
 | [MF demo runbook](docs/runbooks/mf-demo.md) | Running the Module Federation example app |
 | [GitHub mappings runbook](docs/runbooks/github-mappings.md) | Connecting modules to GitHub source repos |
 | [Troubleshooting runbook](docs/runbooks/troubleshooting.md) | Common errors and fixes |
 | [Changelog](CHANGELOG.md) | Version history |
+| [Contributing](CONTRIBUTING.md) | Setup, the CI gate, code and docs conventions |
+| [Security](SECURITY.md) | Reporting vulnerabilities, threat model, scope |
 
 ---
 
 ## License
 
-Private repository — all rights reserved.
+[MIT](LICENSE) © 2026 Sergio Carrero

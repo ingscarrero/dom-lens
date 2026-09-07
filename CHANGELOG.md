@@ -4,6 +4,23 @@ All notable changes to DOM Lens are documented here.
 
 ---
 
+## [Unreleased]
+
+### Added
+- Vitest unit suite (110 tests) for the pure `lib/` modules — concurrency pool, asset classification, fingerprints, sourcemap decoding, GitHub mapping, federation detection, fiber walking, DOM serialisation, screenshot slicing — with enforced coverage floors (`vitest.config.ts`).
+- GitHub Actions CI: `pnpm compile` → `pnpm test:coverage` → `pnpm build` on every PR and push to `main`, with the coverage report uploaded as an artifact.
+- Documentation: `docs/REQUIREMENTS.md`, `docs/SYSTEM_DESIGN.md`, `docs/adr/` (six ADRs), `CONTRIBUTING.md`, `SECURITY.md`; Mermaid diagrams, C4 context/container views and sequence diagrams in `docs/architecture.md`.
+- MIT `LICENSE`; `license`, `repository` and `packageManager` fields in `package.json`.
+
+### Fixed
+- `lib/modules/sourcemap.ts`: base64-encoded inline `sourceMappingURL` data URIs were never decoded (the `;base64` flag check excluded the comma it was testing for) and fell back to a JSON parse error.
+
+### Changed
+- Dependency build scripts are opt-in via `pnpm-workspace.yaml` (`esbuild` allowed, `spawn-sync` ignored) so a clean `pnpm install` exits 0 on pnpm 10+.
+- `docs/architecture.md`: corrected the console-capture trade-off — `window` `error` / `unhandledrejection` listeners are installed; the gap is cross-origin iframes and workers.
+
+---
+
 ## [0.3.21] — 2026-06-11
 
 ### Added
