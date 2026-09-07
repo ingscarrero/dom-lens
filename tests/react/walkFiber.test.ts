@@ -172,22 +172,34 @@ describe('walkAllFiberRoots', () => {
     expect(leaves[0].bounds).toBeUndefined(); // jsdom reports 0x0 rects
   });
 
-  it('dedupes roots seen both via DOM scan and the DevTools hook, and reads legacy roots', () => {
-    const shared = fiber(3, null);
-    mountRoot(shared);
+  it('merges DOM-scanned, legacy and hook-reported roots, deduping by root identity', () => {
+    const container = mountRoot(fiber(3, null));
+    const scannedRoot = (container as any)['__reactContainer$abc123'];
     const legacy = document.createElement('div');
     (legacy as any)._reactRootContainer = { _internalRoot: { current: fiber(3, null) } };
     document.body.appendChild(legacy);
     const hookOnly = { current: fiber(3, null) };
     (window as any).__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
       renderers: new Map([[1, {}]]),
-      getFiberRoots: () => new Set([{ current: shared }, hookOnly]),
+      // The hook reports the very same root object the DOM scan found,
+      // plus one root only it knows about (e.g. a portal-style root).
+      getFiberRoots: () => new Set([scannedRoot, hookOnly]),
     };
-    // The DOM-scanned root object and the hook root wrap the same fiber but
-    // are different objects, so both count; the legacy root adds a third.
     const res = walkAllFiberRoots()!;
-    expect(res.rootCount).toBe(4);
-    expect(res.tree).toHaveLength(4);
+    // scannedRoot counted once, legacy root, hook-only root → 3.
+    expect(res.rootCount).toBe(3);
+    expect(res.tree).toHaveLength(3);
+  });
+
+  it('ignores a DevTools hook whose getFiberRoots throws', () => {
+    mountRoot(fiber(3, null));
+    (window as any).__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
+      renderers: new Map([[1, {}]]),
+      getFiberRoots: () => {
+        throw new Error('hook not ready');
+      },
+    };
+    expect(walkAllFiberRoots()!.rootCount).toBe(1);
   });
 
   it('marks the walk truncated past MAX_NODES', () => {
