@@ -71,3 +71,17 @@ GitHub tokens, cloud accounts, telemetry
 - Dependency build scripts are opt-in (`pnpm-workspace.yaml`
   `allowBuilds`); only `esbuild` is allowed to run one.
 - CI installs with `--frozen-lockfile`.
+- Transitive dev-dependency advisories whose dependents pin a vulnerable
+  version are patched with `overrides` in `pnpm-workspace.yaml` (root)
+  and `examples/mf-demo/pnpm-workspace.yaml` (demo). Each override names
+  the GHSA it closes; drop it once the dependent lifts its pin. `pnpm
+  audit` is expected to be clean in both workspaces.
+
+## Known unresolved advisories
+
+None. Everything Dependabot reports on `main` is either patched in the
+lockfiles or covered by an override above. If a future advisory can only
+be closed by a breaking upgrade of `vite`, `wxt` or `webpack`, it is
+listed here with its GHSA, the reason, and whether it is reachable from
+the shipped extension bundle (the `wxt > web-ext-run` and
+`webpack-dev-server` trees are dev-only and never are).

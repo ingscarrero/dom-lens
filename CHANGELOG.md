@@ -19,6 +19,7 @@ All notable changes to DOM Lens are documented here.
 - `mermaid` bumped to 11.17.2 (transitive `dompurify` 3.4.15) — clears the dompurify advisories flagged by `pnpm audit`.
 - Dropped the redundant `activeTab` permission (`<all_urls>` host permission already covers it); `scripting` / `tabs` are annotated with why they are needed.
 - CI: third-party GitHub Actions pinned to full commit SHAs.
+- Resolved the remaining open Dependabot alerts, all in dev tooling or the `examples/mf-demo` app (the shipped bundle is unchanged; manifest and output file list are byte-identical). Root: `postcss` ^8.5.28, `vite` 8.3.0, `browserslist` 4.28.9, `brace-expansion` 1.1.18 and friends within their declared ranges, plus `pnpm-workspace.yaml` overrides for `adm-zip`, `shell-quote`, `tmp`, `uuid` (under `node-notifier`) and `esbuild` 0.28 whose dependents pin vulnerable versions. Demo: `webpack-dev-server` ^5.2.6, `websocket-driver` 0.7.5, `fast-uri` 3.1.7 and overrides for `shell-quote`, `qs` and `uuid` (under `sockjs`). `pnpm audit` is clean in both workspaces. `SECURITY.md` documents the override policy and a (currently empty) list of unresolved advisories.
 
 ### Fixed
 - `lib/modules/sourcemap.ts`: base64-encoded inline `sourceMappingURL` data URIs were never decoded (the `;base64` flag check excluded the comma it was testing for) and fell back to a JSON parse error.
