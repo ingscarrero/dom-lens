@@ -76,8 +76,8 @@ GitHub tokens, cloud accounts, telemetry
   and `examples/mf-demo/pnpm-workspace.yaml` (demo). Each override names
   the GHSA it closes; drop it once the dependent lifts its pin. `pnpm
   audit` is expected to be clean in both workspaces.
-- pnpm's 24 h `minimumReleaseAge` policy is stated explicitly in
-  `pnpm-workspace.yaml`. Any `minimumReleaseAgeExclude` entry must name
+- pnpm's 24 h `minimumReleaseAge` policy is stated explicitly in both
+  `pnpm-workspace.yaml` files (root and demo). Any `minimumReleaseAgeExclude` entry must name
   the advisory it exists for and the date after which it can be removed.
 
 ## Known unresolved advisories
@@ -87,4 +87,4 @@ lockfiles or covered by an override above. If a future advisory can only
 be closed by a breaking upgrade of `vite`, `wxt` or `webpack`, it is
 listed here with its GHSA, the reason, and whether it is reachable from
 the shipped extension bundle (the `wxt > web-ext-run` and
-`webpack-dev-server` trees are dev-only and never are).
+`webpack-dev-server` trees are dev-only and never ship).
