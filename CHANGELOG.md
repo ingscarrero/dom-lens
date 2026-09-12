@@ -14,7 +14,7 @@ All notable changes to DOM Lens are documented here.
 
 ### Security
 - Components tab: the "Context sent to model" list is rendered as JSX (`lib/ui/inlineCode.tsx`) instead of `dangerouslySetInnerHTML`, so a page-controlled element id / class / component name can no longer inject markup into the DevTools panel.
-- Background `net.fetch` / `net.head` proxy: only `http(s)` URLs to public hosts are fetched; loopback, `*.localhost`, link-local and private ranges (IPv4 and IPv6, including IPv4-mapped forms) are refused, except the configured AI endpoint and the inspected page's own host (`lib/net/urlPolicy.ts`). Redirect targets are checked too.
+- Background `net.fetch` / `net.head` proxy: only `http(s)` URLs to public hosts are fetched; loopback, `*.localhost`, link-local and private ranges (IPv4 and IPv6, including IPv4-mapped forms) are refused, except the configured AI endpoint and the inspected page's own host (`lib/net/urlPolicy.ts`). Redirects are no longer followed. The check is syntactic; DNS rebinding is an accepted, documented residual risk (NFR-S.8).
 - Settings tab warns when the AI endpoint is plain `http://` on a non-loopback host (the API key would travel unencrypted); the plaintext-at-rest storage of the key is documented in `docs/REQUIREMENTS.md`.
 - `mermaid` bumped to 11.17.2 (transitive `dompurify` 3.4.15) — clears the dompurify advisories flagged by `pnpm audit`.
 - Dropped the redundant `activeTab` permission (`<all_urls>` host permission already covers it); `scripting` / `tabs` are annotated with why they are needed.

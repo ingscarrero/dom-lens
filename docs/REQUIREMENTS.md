@@ -115,9 +115,10 @@ servers have small context windows and few inference slots.
 | NFR-S.2 | Model-generated HTML must never gain extension privileges | `ArtifactBlock.tsx` iframe uses `sandbox="allow-scripts"` only (no `allow-same-origin`) → null origin, no `chrome.*` |
 | NFR-S.3 | Never store third-party credentials for GitHub | No PAT field; only unauthenticated `raw.githubusercontent.com` reads (ADR-0004) |
 | NFR-S.4 | Requests to the inspected site must not carry the user's cookies | `net.head` / `net.fetch` use `credentials: 'omit'` |
-| NFR-S.5 | Minimal permission set | `storage`, `scripting`, `activeTab`, `tabs`; `host_permissions: <all_urls>` is required for the CORS-free LLM proxy and `.map` probing (ADR-0001) |
+| NFR-S.5 | Minimal permission set | `storage`, `scripting`, `tabs`; `host_permissions: <all_urls>` is required for the CORS-free LLM proxy and `.map` probing (ADR-0001) and already implies what `activeTab` would grant |
 | NFR-S.6 | The MAIN-world script must not break or be broken by React DevTools | No hook shim or patching (`installDevtoolsHookShim` is a no-op); root discovery is read-only |
 | NFR-S.7 | Page globals are untrusted | Every cross-window read in `detect.ts` / `walkFiber.ts` is wrapped in try/catch; iframe-named globals are skipped |
+| NFR-S.8 | The service-worker fetch proxy must not be usable by a page to reach local or private services | `lib/net/urlPolicy.ts`: only `http(s)`; hostnames that are `localhost` / `*.localhost`, loopback, link-local, RFC1918, CGNAT, fc00::/7, fe80::/10, multicast/reserved or IPv4-mapped forms of those are refused unless they equal the configured AI endpoint host or the inspected page's own host; redirects are never followed (`redirect: 'manual'`, an opaque redirect is reported as a policy failure). **Accepted residual risk:** the check is syntactic — `fetch` exposes no resolved address, so a public DNS name that resolves or is rebound to a private address is not detected. The exposure is a credential-less, redirect-free GET/HEAD whose body is only rendered in the user's own DevTools panel, never returned to the page |
 
 See also [SECURITY.md](../SECURITY.md) for the disclosure policy.
 
@@ -130,7 +131,7 @@ traffic:
 | Destination | When | What is sent | Control |
 |---|---|---|---|
 | Configured AI endpoint (`settings.baseUrl`, default `http://localhost:1234/v1`) | Any AI action (Analyze chat, per-tab analyses, Heal/Refine, enhanced stitch) | Page markdown, screenshots / crops (as data URLs), console entries, React and federation summaries, source file contents, session memory, the user's prompt; `Authorization: Bearer <apiKey>` if set | Endpoint and composition toggles in Settings; nothing is sent until the user triggers an action |
-| The inspected page's own origins | Modules tab opens (probe) and module expansion (fetch) | `HEAD`/`GET` for `<asset>.map` and `GET` for the asset body, `credentials: 'omit'` | Automatic on Modules tab; only touches URLs the page already loaded. The service-worker proxy refuses non-`http(s)` URLs and loopback / link-local / private-range hosts (`lib/net/urlPolicy.ts`), except the configured AI endpoint and the inspected page's own host |
+| The inspected page's own origins | Modules tab opens (probe) and module expansion (fetch) | `HEAD`/`GET` for `<asset>.map` and `GET` for the asset body, `credentials: 'omit'` | Automatic on Modules tab; only touches URLs the page already loaded. The service-worker proxy refuses non-`http(s)` URLs, loopback / link-local / private-range hosts (except the configured AI endpoint and the inspected page's own host) and any redirect — see NFR-S.8 for the DNS-rebinding residual risk |
 | `raw.githubusercontent.com` | User toggles 🐙 GitHub source mode and a mapping matches | Unauthenticated `GET` of a public file path derived from the sourcemap | Off by default; mappings are user-defined |
 | Cursor / Claude Desktop / Claude.ai / GitHub | User clicks a Propose PR export target | The change plan (≤ 8 KB) embedded in a deep-link URL | Explicit click per export |
 

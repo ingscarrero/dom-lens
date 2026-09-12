@@ -137,7 +137,7 @@ describe('isAllowedProxyUrl', () => {
     ]) {
       const d = isAllowedProxyUrl(u);
       expect(d.ok, u).toBe(false);
-      if (!d.ok) expect(d.reason).toMatch(/local or private host/);
+      if (!d.ok) expect(d.reason).toMatch(/loopback, link-local or private-range/);
     }
   });
 

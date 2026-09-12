@@ -10,6 +10,13 @@
  * `http:` / `https:` targets are allowed, plus the explicitly trusted
  * hosts the caller passes in (the user's configured LLM endpoint and the
  * inspected page's own host).
+ *
+ * Accepted residual risk: the check is syntactic. Browser `fetch` gives
+ * no access to the resolved address, so a public DNS name that resolves
+ * (or is rebound) to a private address is not detected. What that buys
+ * an attacker is limited to a credential-less, redirect-free GET / HEAD
+ * whose body is only ever shown in the user's own DevTools panel — the
+ * page cannot read it. See docs/REQUIREMENTS.md §2.2 (NFR-S.8).
  */
 
 export type ProxyUrlDecision =
@@ -176,7 +183,7 @@ export function isAllowedProxyUrl(
   if (isPrivateHostname(url.hostname)) {
     return {
       ok: false,
-      reason: `${url.hostname} is a local or private host (only the configured AI endpoint and the inspected page's own host are exempt)`,
+      reason: `${url.hostname} is a loopback, link-local or private-range address (only the configured AI endpoint and the inspected page's own host are exempt)`,
     };
   }
   return { ok: true, url };

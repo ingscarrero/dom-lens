@@ -44,14 +44,17 @@ async function trustedProxyHosts(inspectedTabId: number | null): Promise<string[
 }
 
 /**
- * After a `redirect: 'follow'` fetch, make sure the final URL still
- * satisfies the policy so a public URL cannot bounce the proxy into a
- * private host. Returns a rejection reason or null.
+ * The proxy never follows redirects: with `redirect: 'follow'` the
+ * browser would contact every hop before we could inspect it, so a
+ * public asset URL could bounce the request into a private host.
+ * Browser `fetch` cannot expose `Location` for a manual follow (the
+ * response is an opaque redirect), so a redirecting URL is reported as
+ * a policy failure instead. Returns the rejection message, or null.
  */
-function redirectPolicyViolation(res: Response, trusted: string[]): string | null {
-  if (!res.url) return null;
-  const decision = isAllowedProxyUrl(res.url, trusted);
-  return decision.ok ? null : `redirected to a blocked URL — ${decision.reason}`;
+function redirectRefusal(res: Response, url: string): string | null {
+  return res.type === 'opaqueredirect'
+    ? `Blocked by URL policy: ${url} redirected — the proxy does not follow redirects`
+    : null;
 }
 
 async function captureVisibleTabWithRetry(
@@ -248,24 +251,19 @@ export default defineBackground({
                 res = await fetch(msg.url, {
                   method: 'HEAD',
                   credentials: 'omit',
-                  redirect: 'follow',
+                  redirect: 'manual',
                 });
               } catch {
                 res = await fetch(msg.url, {
                   method: 'GET',
                   credentials: 'omit',
-                  redirect: 'follow',
+                  redirect: 'manual',
                   headers: { Range: 'bytes=0-0' },
                 });
               }
-              const violation = redirectPolicyViolation(res, trusted);
-              if (violation) {
-                send({
-                  type: 'net.head.result',
-                  requestId: msg.requestId,
-                  ok: false,
-                  message: `Blocked by URL policy: ${violation}`,
-                });
+              const refusal = redirectRefusal(res, msg.url);
+              if (refusal) {
+                send({ type: 'net.head.result', requestId: msg.requestId, ok: false, message: refusal });
                 return;
               }
               const len = Number(res.headers.get('content-length') ?? '0') || undefined;
@@ -304,15 +302,10 @@ export default defineBackground({
               return;
             }
             try {
-              const res = await fetch(msg.url, { credentials: 'omit', redirect: 'follow' });
-              const violation = redirectPolicyViolation(res, trusted);
-              if (violation) {
-                send({
-                  type: 'net.fetch.result',
-                  requestId: msg.requestId,
-                  ok: false,
-                  message: `Blocked by URL policy: ${violation}`,
-                });
+              const res = await fetch(msg.url, { credentials: 'omit', redirect: 'manual' });
+              const refusal = redirectRefusal(res, msg.url);
+              if (refusal) {
+                send({ type: 'net.fetch.result', requestId: msg.requestId, ok: false, message: refusal });
                 return;
               }
               const contentType = res.headers.get('content-type') ?? undefined;
