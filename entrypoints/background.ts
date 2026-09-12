@@ -47,9 +47,12 @@ async function trustedProxyHosts(inspectedTabId: number | null): Promise<string[
  * The proxy never follows redirects: with `redirect: 'follow'` the
  * browser would contact every hop before we could inspect it, so a
  * public asset URL could bounce the request into a private host.
- * Browser `fetch` cannot expose `Location` for a manual follow (the
- * response is an opaque redirect), so a redirecting URL is reported as
- * a policy failure instead. Returns the rejection message, or null.
+ * Hop-by-hop validation is not possible from a service worker: with
+ * `redirect: 'manual'` the browser returns an opaque redirect (status 0,
+ * no `Location`), so there is nothing to validate and re-issue. A
+ * redirecting asset / `.map` URL therefore fails in the Modules tab
+ * with the message below — a deliberate trade-off (NFR-S.8). Returns
+ * the rejection message, or null.
  */
 function redirectRefusal(res: Response, url: string): string | null {
   return res.type === 'opaqueredirect'

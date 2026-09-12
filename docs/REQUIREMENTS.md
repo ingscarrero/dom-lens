@@ -136,7 +136,8 @@ traffic:
 | Cursor / Claude Desktop / Claude.ai / GitHub | User clicks a Propose PR export target | The change plan (≤ 8 KB) embedded in a deep-link URL | Explicit click per export |
 
 Data at rest: only `Settings` (including the optional API key, stored in
-plain text in `chrome.storage.local`, readable by this extension alone) and
+plain text in `chrome.storage.local` — isolated from other extensions and
+pages, but readable by anyone with access to the browser profile) and
 custom prompts / GitHub mappings. Snapshots, analyses and session memory are
 in-memory and discarded when DevTools closes. There is no telemetry, no
 crash reporting, no update ping.

@@ -70,7 +70,8 @@ export default function SettingsTab({ onTestConnection }: Props) {
             placeholder="leave empty for local servers"
           />
           <span className="text-[10px] text-panel-muted">
-            Stored unencrypted in chrome.storage.local (readable by this extension only).
+            Stored unencrypted in chrome.storage.local — anyone with access to this browser
+            profile can read it.
           </span>
         </label>
         <div className="flex items-center gap-2">
