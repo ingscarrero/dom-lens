@@ -5,3 +5,17 @@
 allowBuilds:
   esbuild: true
   spawn-sync: false
+
+minimumReleaseAgeExclude:
+  - adm-zip@0.6.1
+
+# Dev-only transitive advisories whose dependents pin a vulnerable version
+# (all sit under wxt > web-ext-run, the Firefox dev runner, or the build
+# toolchain; none ship in the extension bundle). Revisit when wxt bumps
+# web-ext-run / esbuild and drop the override that is no longer needed.
+overrides:
+  adm-zip: ^0.6.1 # GHSA-xcpc-8h2w-3j85, GHSA-vwc7-r8mq-g2x9
+  shell-quote: ^1.10.0 # GHSA-w7jw-789q-3m8p, GHSA-395f-4hp3-45gv
+  tmp: ^0.2.6 # GHSA-ph9p-34f9-6g65
+  node-notifier>uuid: ^11.1.1 # GHSA-w5hq-g745-h8pq
+  esbuild: ^0.28.1 # GHSA-g7r4-m6w7-qqqr
