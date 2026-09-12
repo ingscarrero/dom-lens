@@ -76,6 +76,9 @@ GitHub tokens, cloud accounts, telemetry
   and `examples/mf-demo/pnpm-workspace.yaml` (demo). Each override names
   the GHSA it closes; drop it once the dependent lifts its pin. `pnpm
   audit` is expected to be clean in both workspaces.
+- pnpm's 24 h `minimumReleaseAge` policy is stated explicitly in
+  `pnpm-workspace.yaml`. Any `minimumReleaseAgeExclude` entry must name
+  the advisory it exists for and the date after which it can be removed.
 
 ## Known unresolved advisories
 

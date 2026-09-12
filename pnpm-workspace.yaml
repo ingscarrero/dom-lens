@@ -6,6 +6,13 @@ allowBuilds:
   esbuild: true
   spawn-sync: false
 
+# Supply-chain release-age policy. pnpm 11 enforces a 24 h minimum age by
+# default and verifies the lockfile against it on every install; it is
+# stated here so the exemption below is read against an explicit rule.
+minimumReleaseAge: 1440
+# adm-zip 0.6.1 (published 2026-09-11) is the only release that closes
+# GHSA-vwc7-r8mq-g2x9 and was under 24 h old when the override was pinned.
+# Safe to delete this exemption after 2026-09-12.
 minimumReleaseAgeExclude:
   - adm-zip@0.6.1
 
