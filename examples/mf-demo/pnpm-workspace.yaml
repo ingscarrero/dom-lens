@@ -1,3 +1,15 @@
 packages:
   - 'host'
   - 'remote'
+
+# Same 24 h release-age policy as the root workspace (pnpm 11's default,
+# stated so the two workspaces are read against one rule).
+minimumReleaseAge: 1440
+
+# Dev-server-only transitive advisories whose dependents pin a vulnerable
+# version (concurrently, express 4 under webpack-dev-server, sockjs).
+# Nothing here is part of the demo's built bundles.
+overrides:
+  shell-quote: ^1.10.0    # GHSA-w7jw-789q-3m8p, GHSA-395f-4hp3-45gv
+  qs: ^6.16.0             # GHSA-4mjr-xmp4-gh2g, GHSA-x5fp-wj9c-mxmx
+  sockjs>uuid: ^11.1.1    # GHSA-w5hq-g745-h8pq

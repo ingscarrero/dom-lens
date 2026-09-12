@@ -35,10 +35,13 @@ These are the targets for the GitHub source mapping configuration.
 
 ## Prerequisites
 
+Install from the demo's workspace root with pnpm, not `npm install`
+inside `host/` and `remote/`: the security overrides for the dev server
+live in `examples/mf-demo/pnpm-workspace.yaml`, and npm ignores that file.
+
 ```bash
 cd examples/mf-demo
-cd host && npm install && cd ..
-cd remote && npm install && cd ..
+pnpm install
 ```
 
 ---
@@ -50,11 +53,11 @@ cd remote && npm install && cd ..
 ```bash
 # Terminal 1
 cd examples/mf-demo/host
-npm start
+pnpm start
 
 # Terminal 2
 cd examples/mf-demo/remote
-npm start
+pnpm start
 ```
 
 - Host: http://localhost:3001
@@ -65,7 +68,7 @@ In the Modules tab, source files will show the embedded source via **📦 Source
 ### Nosources mode (production-like)
 
 ```bash
-NOSOURCES=1 npm start   # in both host and remote terminals
+NOSOURCES=1 pnpm start   # in both host and remote terminals
 ```
 
 Webpack emits `nosources-source-map` — the `.map` file exists and maps positions, but `sourcesContent` is null (no source disclosure). In the Modules tab, files switch to **🐙 GitHub** mode automatically because `sourcesContent` is absent. The GitHub mapping must be configured for this to show source.
@@ -73,7 +76,7 @@ Webpack emits `nosources-source-map` — the `.map` file exists and maps positio
 ### No sourcemaps at all
 
 ```bash
-SOURCEMAPS=0 npm start
+SOURCEMAPS=0 pnpm start
 ```
 
 Webpack emits no `.map` files. The sourcemap probe shows **– missing** for all modules. This simulates a minified production build with no debugging info.
