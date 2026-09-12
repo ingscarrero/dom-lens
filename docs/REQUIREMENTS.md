@@ -130,7 +130,7 @@ traffic:
 | Destination | When | What is sent | Control |
 |---|---|---|---|
 | Configured AI endpoint (`settings.baseUrl`, default `http://localhost:1234/v1`) | Any AI action (Analyze chat, per-tab analyses, Heal/Refine, enhanced stitch) | Page markdown, screenshots / crops (as data URLs), console entries, React and federation summaries, source file contents, session memory, the user's prompt; `Authorization: Bearer <apiKey>` if set | Endpoint and composition toggles in Settings; nothing is sent until the user triggers an action |
-| The inspected page's own origins | Modules tab opens (probe) and module expansion (fetch) | `HEAD`/`GET` for `<asset>.map` and `GET` for the asset body, `credentials: 'omit'` | Automatic on Modules tab; only touches URLs the page already loaded |
+| The inspected page's own origins | Modules tab opens (probe) and module expansion (fetch) | `HEAD`/`GET` for `<asset>.map` and `GET` for the asset body, `credentials: 'omit'` | Automatic on Modules tab; only touches URLs the page already loaded. The service-worker proxy refuses non-`http(s)` URLs and loopback / link-local / private-range hosts (`lib/net/urlPolicy.ts`), except the configured AI endpoint and the inspected page's own host |
 | `raw.githubusercontent.com` | User toggles 🐙 GitHub source mode and a mapping matches | Unauthenticated `GET` of a public file path derived from the sourcemap | Off by default; mappings are user-defined |
 | Cursor / Claude Desktop / Claude.ai / GitHub | User clicks a Propose PR export target | The change plan (≤ 8 KB) embedded in a deep-link URL | Explicit click per export |
 
@@ -139,6 +139,15 @@ plain text in `chrome.storage.local`, readable by this extension alone) and
 custom prompts / GitHub mappings. Snapshots, analyses and session memory are
 in-memory and discarded when DevTools closes. There is no telemetry, no
 crash reporting, no update ping.
+
+API key handling: the key is **not encrypted** at rest — `chrome.storage.local`
+is isolated per extension but stored in the clear on disk, so anyone with
+access to the browser profile can read it. Prefer keys scoped to a local or
+low-privilege endpoint. In transit the key is sent only as
+`Authorization: Bearer` to `settings.baseUrl`; when that URL is plain `http://`
+on a non-loopback host, the Settings tab shows a warning
+(`insecureTransportWarning` in `lib/storage/settings.ts`) because the key and
+every snapshot would cross the network unencrypted.
 
 ### 2.4 Reliability and error behaviour
 

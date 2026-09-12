@@ -1,3 +1,5 @@
+import { isLoopbackHostname } from '@/lib/net/urlPolicy';
+
 export interface CustomPrompt {
   id: string;
   label: string;
@@ -79,6 +81,28 @@ export const DEFAULT_SETTINGS: Settings = {
 };
 
 const KEY = 'dom-lens.settings';
+
+/**
+ * Warn when the AI endpoint is reached over plain HTTP on a non-loopback
+ * host: the `Authorization: Bearer <apiKey>` header (and every page
+ * snapshot) would cross the network unencrypted. Loopback endpoints
+ * (LM Studio / Ollama on localhost) never leave the machine, so they
+ * are exempt. Returns null when there is nothing to warn about or the
+ * URL does not parse (the connection test reports that separately).
+ */
+export function insecureTransportWarning(baseUrl: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(baseUrl);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'http:' || isLoopbackHostname(url.hostname)) return null;
+  return (
+    `${url.host} is reached over plain HTTP. The API key and every snapshot ` +
+    'sent to it travel unencrypted — use https:// for any endpoint that is not on this machine.'
+  );
+}
 
 export async function loadSettings(): Promise<Settings> {
   const res = await chrome.storage.local.get(KEY);
