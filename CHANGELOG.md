@@ -12,6 +12,14 @@ All notable changes to DOM Lens are documented here.
 - Documentation: `docs/REQUIREMENTS.md`, `docs/SYSTEM_DESIGN.md`, `docs/adr/` (six ADRs), `CONTRIBUTING.md`, `SECURITY.md`; Mermaid diagrams, C4 context/container views and sequence diagrams in `docs/architecture.md`.
 - MIT `LICENSE`; `license`, `repository` and `packageManager` fields in `package.json`.
 
+### Security
+- Components tab: the "Context sent to model" list is rendered as JSX (`lib/ui/inlineCode.tsx`) instead of `dangerouslySetInnerHTML`, so a page-controlled element id / class / component name can no longer inject markup into the DevTools panel.
+- Background `net.fetch` / `net.head` proxy: only `http(s)` URLs to public hosts are fetched; loopback, `*.localhost`, link-local and private ranges (IPv4 and IPv6, including IPv4-mapped forms) are refused, except the configured AI endpoint and the inspected page's own host (`lib/net/urlPolicy.ts`). Redirect targets are checked too.
+- Settings tab warns when the AI endpoint is plain `http://` on a non-loopback host (the API key would travel unencrypted); the plaintext-at-rest storage of the key is documented in `docs/REQUIREMENTS.md`.
+- `mermaid` bumped to 11.17.2 (transitive `dompurify` 3.4.15) — clears the dompurify advisories flagged by `pnpm audit`.
+- Dropped the redundant `activeTab` permission (`<all_urls>` host permission already covers it); `scripting` / `tabs` are annotated with why they are needed.
+- CI: third-party GitHub Actions pinned to full commit SHAs.
+
 ### Fixed
 - `lib/modules/sourcemap.ts`: base64-encoded inline `sourceMappingURL` data URIs were never decoded (the `;base64` flag check excluded the comma it was testing for) and fell back to a JSON parse error.
 
