@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useStore } from '../store';
 import {
   saveSettings,
+  insecureTransportWarning,
   DEFAULT_SETTINGS,
   type GithubMapping,
 } from '@/lib/storage/settings';
@@ -18,6 +19,7 @@ export default function SettingsTab({ onTestConnection }: Props) {
   const setTestConnection = useStore((s) => s.setTestConnection);
 
   const [local, setLocal] = useState(settings);
+  const transportWarning = insecureTransportWarning(local.baseUrl);
 
   const save = async (next: typeof local) => {
     setLocal(next);
@@ -43,6 +45,11 @@ export default function SettingsTab({ onTestConnection }: Props) {
           <span className="text-[10px] text-panel-muted">
             LM Studio default: http://localhost:1234/v1 · Ollama: http://localhost:11434/v1
           </span>
+          {transportWarning && (
+            <span role="alert" className="mt-1 block text-[10px] text-amber-300">
+              ⚠ {transportWarning}
+            </span>
+          )}
         </label>
         <label className="block">
           <span className="text-panel-muted">Model</span>
@@ -62,6 +69,10 @@ export default function SettingsTab({ onTestConnection }: Props) {
             onChange={(e) => save({ ...local, apiKey: e.target.value })}
             placeholder="leave empty for local servers"
           />
+          <span className="text-[10px] text-panel-muted">
+            Stored unencrypted in chrome.storage.local — anyone with access to this browser
+            profile can read it.
+          </span>
         </label>
         <div className="flex items-center gap-2">
           <button

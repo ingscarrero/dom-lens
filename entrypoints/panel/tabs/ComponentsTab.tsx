@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { renderInlineCode } from '@/lib/ui/inlineCode';
 import { Tree, type NodeApi, type NodeRendererProps } from 'react-arborist';
 import { useStore } from '../store';
 import type { ComponentNode } from '@/lib/react/fiberToTree';
@@ -927,14 +928,12 @@ function UxAnalysisPane({
                   {result.inputs.map((b, i) => (
                     <li key={i} className="flex gap-1.5">
                       <span className="text-panel-muted">·</span>
-                      <span
-                        dangerouslySetInnerHTML={{
-                          __html: b.replace(
-                            /`([^`]+)`/g,
-                            '<code class="rounded bg-black/40 px-1 text-[10px] text-amber-200">$1</code>',
-                          ),
-                        }}
-                      />
+                      <span>
+                        {renderInlineCode(
+                          b,
+                          'rounded bg-black/40 px-1 text-[10px] text-amber-200',
+                        )}
+                      </span>
                     </li>
                   ))}
                 </ul>

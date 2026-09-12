@@ -18,7 +18,7 @@ export default defineConfig({
     },
   },
   test: {
-    include: ['tests/**/*.test.ts'],
+    include: ['tests/**/*.test.{ts,tsx}'],
     // Default to node; DOM-dependent suites opt into jsdom with a
     // `// @vitest-environment jsdom` pragma at the top of the file.
     environment: 'node',
@@ -34,10 +34,12 @@ export default defineConfig({
         'lib/modules/fingerprints.ts',
         'lib/modules/githubMapping.ts',
         'lib/modules/sourcemap.ts',
+        'lib/net/urlPolicy.ts',
         'lib/react/fiberToTree.ts',
         'lib/react/walkFiber.ts',
         'lib/snapshot/serializeDom.ts',
         'lib/snapshot/slicer.ts',
+        'lib/ui/inlineCode.tsx',
       ],
       // Measured baseline (2026-09-07): lines 97.1 / branches 88.7 /
       // functions 98.8 / statements 94.8.

@@ -1,6 +1,8 @@
 import { defineBackground } from 'wxt/utils/define-background';
 import type { PanelToBg, BgToPanel } from '@/lib/bridge/protocol';
 import { chatStream, listModels } from '@/lib/lm-studio/client';
+import { loadSettings } from '@/lib/storage/settings';
+import { hostOf, isAllowedProxyUrl } from '@/lib/net/urlPolicy';
 
 /**
  * Chrome's chrome.tabs.captureVisibleTab is rate-limited to ~2 calls/sec per
@@ -14,6 +16,48 @@ function formatBytesForError(n: number): string {
   if (n < 1024) return n + ' B';
   if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
   return (n / (1024 * 1024)).toFixed(2) + ' MB';
+}
+
+/**
+ * Hosts the `net.fetch` / `net.head` proxy may reach even when they are
+ * loopback / private: the user's configured AI endpoint and the
+ * inspected page's own host (so local dev servers keep working — the
+ * page can already fetch its own origin, so this grants nothing new).
+ */
+async function trustedProxyHosts(inspectedTabId: number | null): Promise<string[]> {
+  const hosts: string[] = [];
+  try {
+    const h = hostOf((await loadSettings()).baseUrl);
+    if (h) hosts.push(h);
+  } catch {
+    /* storage unavailable — fall through with no exemption */
+  }
+  if (inspectedTabId != null) {
+    try {
+      const h = hostOf((await chrome.tabs.get(inspectedTabId)).url);
+      if (h) hosts.push(h);
+    } catch {
+      /* tab gone */
+    }
+  }
+  return hosts;
+}
+
+/**
+ * The proxy never follows redirects: with `redirect: 'follow'` the
+ * browser would contact every hop before we could inspect it, so a
+ * public asset URL could bounce the request into a private host.
+ * Hop-by-hop validation is not possible from a service worker: with
+ * `redirect: 'manual'` the browser returns an opaque redirect (status 0,
+ * no `Location`), so there is nothing to validate and re-issue. A
+ * redirecting asset / `.map` URL therefore fails in the Modules tab
+ * with the message below — a deliberate trade-off (NFR-S.8). Returns
+ * the rejection message, or null.
+ */
+function redirectRefusal(res: Response, url: string): string | null {
+  return res.type === 'opaqueredirect'
+    ? `Blocked by URL policy: ${url} redirected — the proxy does not follow redirects`
+    : null;
 }
 
 async function captureVisibleTabWithRetry(
@@ -193,21 +237,37 @@ export default defineBackground({
             // without downloading them. Some servers reject HEAD; fall
             // back to a GET with a Range: 0-0 request, which most CDNs
             // honour and reply to with 206 Partial Content.
+            const trusted = await trustedProxyHosts(inspectedTabId);
+            const policy = isAllowedProxyUrl(msg.url, trusted);
+            if (!policy.ok) {
+              send({
+                type: 'net.head.result',
+                requestId: msg.requestId,
+                ok: false,
+                message: `Blocked by URL policy: ${policy.reason}`,
+              });
+              return;
+            }
             try {
               let res: Response;
               try {
                 res = await fetch(msg.url, {
                   method: 'HEAD',
                   credentials: 'omit',
-                  redirect: 'follow',
+                  redirect: 'manual',
                 });
               } catch {
                 res = await fetch(msg.url, {
                   method: 'GET',
                   credentials: 'omit',
-                  redirect: 'follow',
+                  redirect: 'manual',
                   headers: { Range: 'bytes=0-0' },
                 });
+              }
+              const refusal = redirectRefusal(res, msg.url);
+              if (refusal) {
+                send({ type: 'net.head.result', requestId: msg.requestId, ok: false, message: refusal });
+                return;
               }
               const len = Number(res.headers.get('content-length') ?? '0') || undefined;
               send({
@@ -233,8 +293,24 @@ export default defineBackground({
             // 10-20 MB. 32 is the empirical ceiling before
             // memory pressure inside the SW becomes noticeable.
             const max = msg.maxBytes ?? 32 * 1024 * 1024;
+            const trusted = await trustedProxyHosts(inspectedTabId);
+            const policy = isAllowedProxyUrl(msg.url, trusted);
+            if (!policy.ok) {
+              send({
+                type: 'net.fetch.result',
+                requestId: msg.requestId,
+                ok: false,
+                message: `Blocked by URL policy: ${policy.reason}`,
+              });
+              return;
+            }
             try {
-              const res = await fetch(msg.url, { credentials: 'omit', redirect: 'follow' });
+              const res = await fetch(msg.url, { credentials: 'omit', redirect: 'manual' });
+              const refusal = redirectRefusal(res, msg.url);
+              if (refusal) {
+                send({ type: 'net.fetch.result', requestId: msg.requestId, ok: false, message: refusal });
+                return;
+              }
               const contentType = res.headers.get('content-type') ?? undefined;
               // `fetch` resolves successfully on 4xx/5xx — it only rejects
               // on network/CORS/abort errors. So we have to check `ok`

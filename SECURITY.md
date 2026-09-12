@@ -57,9 +57,14 @@ GitHub tokens, cloud accounts, telemetry
 ## Hardening notes for reviewers
 
 - `wxt.config.ts` declares the manifest; permissions are `storage`,
-  `scripting`, `activeTab`, `tabs` plus `<all_urls>` host access, which
-  the CORS-free LLM proxy and `.map` probing require
+  `scripting`, `tabs` plus `<all_urls>` host access, which the CORS-free
+  LLM proxy and `.map` probing require
   ([ADR-0001](docs/adr/0001-main-world-eval-over-content-script-bridge.md)).
+- The service-worker fetch proxy only reaches public `http(s)` hosts
+  (plus the configured AI endpoint and the inspected page's own host) and
+  never follows redirects; the hostname check is syntactic, so DNS
+  rebinding is an accepted residual risk documented in
+  [REQUIREMENTS.md NFR-S.8](docs/REQUIREMENTS.md#22-security-and-csp-posture).
 - The MAIN-world script never patches React DevTools' hook
   ([ADR-0006](docs/adr/0006-read-only-react-root-discovery.md)) and wraps
   every cross-window read in try/catch.
